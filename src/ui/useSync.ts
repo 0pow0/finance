@@ -70,7 +70,8 @@ export function useSync(
         open: (t) => session.openFromSync(t),
         device: cfg.deviceName,
       });
-      const latest = ledgerRef.current!;
+      const latest = ledgerRef.current;
+      if (!latest) return; // locked while syncing: keep nothing in memory; the next unlock syncs again
       // If something changed on this phone while syncing, keep it and sync again.
       const final = latest === before ? res.ledger : mergeLedgers(latest, res.ledger);
       if (latest !== before) again.current = true;

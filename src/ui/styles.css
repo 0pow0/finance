@@ -17,7 +17,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0e1013;
     --surface: #181b20;
     --surface-2: #22262d;
@@ -31,8 +31,28 @@
     --bad: #fb923c;
     --bar-track: #2c313a;
     --shadow: none;
+    color-scheme: dark;
   }
 }
+
+:root[data-theme="dark"] {
+  --bg: #0e1013;
+  --surface: #181b20;
+  --surface-2: #22262d;
+  --text: #eceef1;
+  --muted: #9aa3b2;
+  --border: #2c313a;
+  --accent: #5b8def;
+  --accent-text: #0e1013;
+  --good: #4ade80;
+  --warn: #fbbf24;
+  --bad: #fb923c;
+  --bar-track: #2c313a;
+  --shadow: none;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
 
 * { box-sizing: border-box; }
 
@@ -197,3 +217,6 @@ button.card { width: 100%; text-align: left; cursor: pointer; font: inherit; col
 .settings-row-value { color: var(--muted); font-size: 15px; }
 hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 8px 0; }
 .btn svg { width: 24px; height: 24px; }
+.confirm-backdrop { z-index: 40; }
+.sheet.confirm { padding-top: 20px; }
+.btn.danger-fill { background: var(--bad); color: #fff; border-color: transparent; }

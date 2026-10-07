@@ -7,6 +7,7 @@ import {
 } from '../lib/ledger';
 import { checkPassphrase, eraseVault, type Session } from '../lib/vault';
 import { Sheet, categoryGroup, readFileText, saveFile } from './common';
+import { useConfirm } from './confirm';
 
 type Dialog =
   | { kind: 'account'; type: 'card' | 'category'; account?: Account }
@@ -25,6 +26,7 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
   toast: (msg: string) => void;
 }) {
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  const ask = useConfirm();
   const cardAccounts = ledger.accounts.filter((a) => isCard(a.name));
   const catAccounts = ledger.accounts.filter((a) => isCategory(a.name)).sort((a, b) => a.name.localeCompare(b.name));
   const lastBackup = session.lastBackupAt ? new Date(session.lastBackupAt).toLocaleDateString() : 'never';
@@ -77,7 +79,11 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
           const text = await readFileText('.json,application/json');
           if (!text) return;
           const restored = await session.readBackup(text);
-          if (confirm(`Replace everything on this phone with the backup (${restored.transactions.length} transactions)?`)) {
+          if (await ask({
+            title: 'Restore backup?',
+            message: `This replaces everything on this phone with the backup (${restored.transactions.length} transactions).`,
+            confirmLabel: 'Replace with backup', danger: true,
+          })) {
             onReplace(restored);
             toast('Backup restored');
           }
@@ -85,7 +91,11 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
           <span className="grow">Restore from backup…</span>
         </button>
         <button className="row" onClick={() => guard(async () => {
-          if (!confirm('The Beancount file is NOT encrypted. Only save it somewhere private (not a shared or cloud folder). Continue?')) return;
+          if (!(await ask({
+            title: 'Export unencrypted file?',
+            message: 'The Beancount file is not encrypted. Only save it somewhere private, not in a shared or cloud folder.',
+            confirmLabel: 'Export',
+          }))) return;
           await saveFile(`household-${todayISO()}.beancount`, toBeancount(ledger), 'text/plain');
         })}>
           <span className="grow">Export Beancount file</span>
@@ -95,7 +105,11 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
           const text = await readFileText('.beancount,.bean,.txt,text/plain');
           if (!text) return;
           const imported = fromBeancount(text);
-          if (confirm(`Replace everything on this phone with this file (${imported.transactions.length} transactions, ${imported.budgets.length} budgets)?`)) {
+          if (await ask({
+            title: 'Import Beancount file?',
+            message: `This replaces everything on this phone with the file (${imported.transactions.length} transactions, ${imported.budgets.length} budgets).`,
+            confirmLabel: 'Replace with file', danger: true,
+          })) {
             onReplace(imported);
             toast('Beancount file imported');
           }
@@ -126,7 +140,11 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
       </div>
 
       <button className="btn danger block" onClick={async () => {
-        if (prompt('This permanently deletes the ledger on this phone. Make sure you have a backup and your household key. Type DELETE to confirm.') === 'DELETE') {
+        if (await ask({
+          title: 'Erase this phone’s ledger?',
+          message: 'This permanently deletes the ledger on this phone. Make sure you have a backup and your household key.',
+          confirmLabel: 'Erase', danger: true, typeToConfirm: 'DELETE',
+        })) {
           await eraseVault();
           onErased();
         }

@@ -6,6 +6,7 @@ import {
 } from '../lib/ledger';
 import { centsToDecimal, parseCents } from '../lib/money';
 import { Sheet, cards, categories, categoryGroup } from './common';
+import { useConfirm } from './confirm';
 
 /** The most recent category and card used with this payee, to pre-fill the form. */
 function lastUse(ledger: Ledger, payee: string): { category?: string; card?: string } {
@@ -24,6 +25,7 @@ export function TxnEditor({ ledger, txn, onSave, onDelete, onClose }: {
   onDelete?: (id: string) => void;
   onClose: () => void;
 }) {
+  const ask = useConfirm();
   const cardList = cards(ledger);
   const catList = categories(ledger);
   const sides = txn ? txnSides(txn) : undefined;
@@ -176,7 +178,11 @@ export function TxnEditor({ ledger, txn, onSave, onDelete, onClose }: {
         {error && <p className="error">{error}</p>}
         <button className="btn primary block" onClick={save}>Save</button>
         {txn && onDelete && (
-          <button className="btn danger block" onClick={() => confirm('Delete this transaction?') && onDelete(txn.id)}>Delete</button>
+          <button className="btn danger block" onClick={async () => {
+            if (await ask({ title: 'Delete this transaction?', message: `${txn.payee} on ${txn.date}`, confirmLabel: 'Delete', danger: true })) {
+              onDelete(txn.id);
+            }
+          }}>Delete</button>
         )}
       </div>
     </Sheet>

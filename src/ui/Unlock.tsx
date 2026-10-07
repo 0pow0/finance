@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { checkPassphrase, eraseVault, resetPassphrase, unlockVault, type Session } from '../lib/vault';
+import { useConfirm } from './confirm';
 
 export function Unlock({ onReady, onErased }: { onReady: (s: Session) => void; onErased: () => void }) {
+  const ask = useConfirm();
   const [mode, setMode] = useState<'pass' | 'forgot'>('pass');
   const [pass, setPass] = useState('');
   const [recovery, setRecovery] = useState('');
@@ -44,7 +46,11 @@ export function Unlock({ onReady, onErased }: { onReady: (s: Session) => void; o
         <button className="btn link" onClick={() => { setMode('pass'); setPass(''); setError(''); }}>Back</button>
         <hr />
         <button className="btn danger block" onClick={async () => {
-          if (prompt('This permanently deletes the ledger stored on this phone. Type DELETE to confirm.') === 'DELETE') {
+          if (await ask({
+            title: 'Erase this phone’s ledger?',
+            message: 'This permanently deletes the ledger stored on this phone. Without a backup, it cannot be recovered.',
+            confirmLabel: 'Erase', danger: true, typeToConfirm: 'DELETE',
+          })) {
             await eraseVault();
             onErased();
           }

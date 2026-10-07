@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { monthOf, todayISO } from '../lib/dates';
-import { deleteTransaction, upsertTransaction, type Ledger, type Transaction } from '../lib/ledger';
+import { deleteTransaction, markReplaced, upsertTransaction, type Ledger, type Transaction } from '../lib/ledger';
 import { loadVault, requestPersistence, type Session } from '../lib/vault';
 import { Activity } from './Activity';
 import { Icon } from './common';
@@ -9,6 +9,7 @@ import { Settings } from './Settings';
 import { Setup } from './Setup';
 import { TxnEditor } from './TxnEditor';
 import { Unlock } from './Unlock';
+import { describeStatus, useSync } from './useSync';
 
 type Screen = 'loading' | 'setup' | 'locked' | 'open';
 type Tab = 'home' | 'activity' | 'settings';
@@ -32,6 +33,8 @@ export function App() {
   const [toastMsg, setToastMsg] = useState('');
   const [autoLock, setAutoLockState] = useState(readAutoLock);
   const lastActive = useRef(Date.now());
+  const ledgerRef = useRef<Ledger | null>(null);
+  ledgerRef.current = ledger;
 
   useEffect(() => {
     loadVault()
@@ -80,11 +83,20 @@ export function App() {
     requestPersistence();
   }
 
-  async function commit(next: Ledger) {
+  const apply = useCallback(async (next: Ledger) => {
     if (!session) return;
+    await session.save(next);
+    ledgerRef.current = next;
+    setLedger(next);
+  }, [session]);
+
+  const onImported = useCallback((n: number) => toast(`${n} new bank transaction${n === 1 ? '' : 's'} to review`), [toast]);
+  const sync = useSync(session, ledgerRef, apply, onImported);
+
+  async function commit(next: Ledger) {
     try {
-      await session.save(next);
-      setLedger(next);
+      await apply(next);
+      sync.requestSync();
     } catch (e) {
       toast(`Couldn’t save: ${(e as Error).message}`);
     }
@@ -114,12 +126,19 @@ export function App() {
     <div className="app">
       {tab === 'home' && (
         <>
-          <h1>{ledger.title}</h1>
-          {ledger.transactions.length > 0 && daysSinceBackup > 7 && (
+          <div className="spread">
+            <h1>{ledger.title}</h1>
+            {sync.device?.sync && (
+              <button className={`btn link small sync-status ${sync.status.state === 'error' ? 'bad' : 'muted'}`}
+                onClick={() => (sync.status.state === 'error' ? setTab('settings') : void sync.syncNow())}>
+                {sync.status.state === 'error' ? 'Sync problem' : describeStatus(sync.status)}
+              </button>
+            )}
+          </div>
+          {!sync.device?.sync && ledger.transactions.length > 0 && daysSinceBackup > 7 && (
             <button className="card notice small" onClick={() => setTab('settings')}>
               {session.lastBackupAt ? 'It’s been over a week since your last backup.' : 'You haven’t made a backup yet.'}{' '}
-              Until phone-to-phone sync is added, download an encrypted backup weekly (Settings → Download encrypted
-              backup).
+              Turn on sync (Settings → Sync) or download an encrypted backup weekly.
             </button>
           )}
           <Home ledger={ledger} month={month} setMonth={setMonth} onChange={commit} reviewCount={reviewCount}
@@ -127,10 +146,12 @@ export function App() {
         </>
       )}
       {tab === 'activity' && (
-        <Activity ledger={ledger} onOpen={setEditing} reviewOnly={reviewOnly} setReviewOnly={setReviewOnly} />
+        <Activity ledger={ledger} onOpen={setEditing} reviewOnly={reviewOnly} setReviewOnly={setReviewOnly}
+          onChange={commit} toast={toast} />
       )}
       {tab === 'settings' && (
-        <Settings session={session} ledger={ledger} onChange={commit} onReplace={commit} onLock={lock}
+        <Settings session={session} ledger={ledger} onChange={commit} onReplace={(l) => commit(markReplaced(l))} onLock={lock}
+          sync={sync}
           onErased={() => { setSession(null); setLedger(null); setScreen('setup'); }}
           autoLock={autoLock} setAutoLock={setAutoLock} toast={toast} />
       )}

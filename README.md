@@ -18,12 +18,14 @@ exported and checked with standard tools.
 - Export to / import from a Beancount file
 - Works offline and installs to the iPhone Home Screen
 
+- Encrypted sync between both phones through a private GitHub repo (merges edits from both phones)
+- Daily automatic Chase & Amex import (SimpleFIN + scheduled job), auto-categorized, with a review
+  inbox and "Approve all". Setup: [docs/SYNC-SETUP.md](docs/SYNC-SETUP.md)
+
 ## Coming next
 
-1. Encrypted sync between both phones (via a separate private GitHub repo)
-2. Daily automatic Chase & Amex import (SimpleFIN + scheduled GitHub Action) with a review inbox
-3. Apple Pay capture through an iOS Shortcut
-4. Face ID unlock (passkey)
+1. Apple Pay capture through an iOS Shortcut
+2. Face ID unlock (passkey)
 
 ## How the security works
 
@@ -35,6 +37,8 @@ exported and checked with standard tools.
 | Recovery | The household key is shown once as a 55-character code (with typo checksum) to print and keep safe. |
 | The web page | Only serves code. A strict Content Security Policy allows no third-party scripts and no network access except `api.github.com` (for future sync). |
 | Auto-lock | After 1–60 minutes idle (default 5); the key is dropped from memory. |
+| Sync | The ledger is pushed to a private repo encrypted with the household key. Each phone's GitHub token is stored encrypted on that phone only. |
+| Bank import | The daily job (`importer/`) encrypts new transactions to the household's import *public* key; only the phones hold the private key. |
 
 If every phone **and** the printed household key are lost, the data cannot be recovered.
 

@@ -1,13 +1,15 @@
 import { useMemo, useState } from 'react';
-import { accountLabel, sortedTransactions, txnAmount, txnSides, type Ledger, type Transaction } from '../lib/ledger';
+import { accountLabel, approveTransactions, sortedTransactions, txnAmount, txnSides, type Ledger, type Transaction } from '../lib/ledger';
 import { formatUSD } from '../lib/money';
 import { cards } from './common';
 
-export function Activity({ ledger, onOpen, reviewOnly, setReviewOnly }: {
+export function Activity({ ledger, onOpen, reviewOnly, setReviewOnly, onChange, toast }: {
   ledger: Ledger;
   onOpen: (t: Transaction) => void;
   reviewOnly: boolean;
   setReviewOnly: (v: boolean) => void;
+  onChange: (l: Ledger) => void;
+  toast: (m: string) => void;
 }) {
   const [query, setQuery] = useState('');
   const [card, setCard] = useState('');
@@ -41,6 +43,17 @@ export function Activity({ ledger, onOpen, reviewOnly, setReviewOnly }: {
         ))}
         <button className={`chip ${reviewOnly ? 'on' : ''}`} onClick={() => setReviewOnly(!reviewOnly)}>To review</button>
       </div>
+
+      {reviewOnly && filtered.length > 0 && (
+        <div className="card spread">
+          <span className="small">Check the categories, tap any to fix, then approve.</span>
+          <button className="btn primary" onClick={() => {
+            onChange(approveTransactions(ledger, new Set(filtered.map((t) => t.id))));
+            toast(`Approved ${filtered.length}`);
+            setReviewOnly(false);
+          }}>Approve {filtered.length}</button>
+        </div>
+      )}
 
       {filtered.length === 0 && (
         <div className="card muted small">

@@ -8,14 +8,18 @@ import {
 import { checkPassphrase, eraseVault, type Session } from '../lib/vault';
 import { Sheet, categoryGroup, readFileText, saveFile } from './common';
 import { useConfirm } from './confirm';
+import { describeStatus, timeAgo, type SyncControls } from './useSync';
 
 type Dialog =
   | { kind: 'account'; type: 'card' | 'category'; account?: Account }
   | { kind: 'passphrase' }
-  | { kind: 'reveal' };
+  | { kind: 'reveal' }
+  | { kind: 'sync' }
+  | { kind: 'bank'; id: string };
 
-export function Settings({ session, ledger, onChange, onReplace, onLock, onErased, autoLock, setAutoLock, toast }: {
+export function Settings({ session, ledger, onChange, onReplace, onLock, onErased, autoLock, setAutoLock, toast, sync }: {
   session: Session;
+  sync: SyncControls;
   ledger: Ledger;
   onChange: (l: Ledger) => void;
   onReplace: (l: Ledger) => void;
@@ -42,6 +46,52 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
   return (
     <div className="stack">
       <h1>Settings</h1>
+
+      <h3>Sync between phones</h3>
+      <div className="list">
+        {sync.device?.sync ? (
+          <>
+            <div className="row">
+              <span className={`status-dot ${sync.status.state}`} />
+              <span className="grow small">{describeStatus(sync.status)}</span>
+              <button className="btn" disabled={sync.status.state === 'syncing'} onClick={() => void sync.syncNow()}>Sync now</button>
+            </div>
+            <button className="row" onClick={() => setDialog({ kind: 'sync' })}>
+              <span className="grow">Data repo</span>
+              <span className="settings-row-value">{sync.device.sync.repo}</span>
+            </button>
+          </>
+        ) : (
+          <button className="row" onClick={() => setDialog({ kind: 'sync' })}>
+            <span className="grow">Set up sync</span>
+            <span className="settings-row-value">Off</span>
+          </button>
+        )}
+      </div>
+
+      <h3>Bank import</h3>
+      <div className="list">
+        <div className="row">
+          <span className="grow small">
+            {ledger.lastImportAt
+              ? `Last bank import ${timeAgo(ledger.lastImportAt)}`
+              : sync.device?.sync
+                ? 'Waiting for the first daily import from SimpleFIN.'
+                : 'Bank import arrives through sync. Set up sync first.'}
+          </span>
+        </div>
+        {Object.entries(ledger.importAccounts ?? {}).map(([id, a]) => (
+          <button className="row" key={id} onClick={() => setDialog({ kind: 'bank', id })}>
+            <span className="grow">
+              <span className="title">{a.name}</span>
+              <span className="tiny muted"> · {a.org}</span>
+            </span>
+            <span className="settings-row-value">
+              {a.account ? ledger.accounts.find((x) => x.name === a.account)?.label ?? a.account : 'Not imported'}
+            </span>
+          </button>
+        ))}
+      </div>
 
       <h3>Cards</h3>
       <div className="list">
@@ -157,6 +207,11 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
       )}
       {dialog?.kind === 'passphrase' && <PassphraseSheet session={session} onClose={() => setDialog(null)} toast={toast} />}
       {dialog?.kind === 'reveal' && <RevealSheet session={session} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'sync' && <SyncSheet sync={sync} onClose={() => setDialog(null)} toast={toast} />}
+      {dialog?.kind === 'bank' && (
+        <BankAccountSheet ledger={ledger} id={dialog.id} onClose={() => setDialog(null)}
+          onSave={(l) => { onChange(l); setDialog(null); }} />
+      )}
     </div>
   );
 }
@@ -280,6 +335,116 @@ function RevealSheet({ session, onClose }: { session: Session; onClose: () => vo
             }}>Show</button>
           </>
         )}
+      </div>
+    </Sheet>
+  );
+}
+
+function SyncSheet({ sync, onClose, toast }: { sync: SyncControls; onClose: () => void; toast: (m: string) => void }) {
+  const current = sync.device?.sync;
+  const ask = useConfirm();
+  const [repo, setRepo] = useState(current?.repo ?? '');
+  const [token, setToken] = useState('');
+  const [name, setName] = useState(current?.deviceName ?? '');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function connect() {
+    setBusy(true);
+    setError('');
+    try {
+      await sync.connect(repo, token || current?.token || '', name);
+      toast('Sync connected');
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet title="Sync" onClose={onClose}>
+      <div className="stack">
+        <p className="small">
+          Both phones save the ledger, encrypted with your household key, to a private GitHub repo. GitHub only ever
+          sees scrambled data.
+        </p>
+        <ol className="steps">
+          <li>On GitHub, create a <strong>private</strong> repo (for example <code>finance-data</code>).</li>
+          <li>
+            Create a token: GitHub → Settings → Developer settings → Fine-grained tokens → Generate. Under
+            <em> Repository access</em> pick only that repo; under <em>Permissions → Contents</em> choose
+            <strong> Read and write</strong>.
+          </li>
+          <li>Paste the repo name and token below. Each phone can use its own token.</li>
+        </ol>
+        <label className="field">
+          <span>Data repo (owner/name)</span>
+          <input className="input" autoCapitalize="off" autoCorrect="off" spellCheck={false} placeholder="yourname/finance-data"
+            value={repo} onChange={(e) => setRepo(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>{current ? 'New token (leave empty to keep the current one)' : 'GitHub token'}</span>
+          <input className="input" type="password" autoComplete="off" autoCapitalize="off" spellCheck={false}
+            placeholder="github_pat_…" value={token} onChange={(e) => setToken(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Name for this phone</span>
+          <input className="input" placeholder="e.g. Alex’s iPhone" value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <p className="tiny muted">The token is stored encrypted on this phone only and is never synced.</p>
+        {error && <p className="error">{error}</p>}
+        <button className="btn primary block" disabled={busy || !repo.trim() || (!token.trim() && !current)} onClick={connect}>
+          {busy ? 'Checking…' : current ? 'Save' : 'Connect'}
+        </button>
+        {current && (
+          <button className="btn danger block" onClick={async () => {
+            if (await ask({
+              title: 'Turn off sync on this phone?',
+              message: 'This phone keeps its data but stops syncing. The other phone and the data repo are not affected.',
+              confirmLabel: 'Turn off', danger: true,
+            })) {
+              await sync.disconnect();
+              toast('Sync turned off');
+              onClose();
+            }
+          }}>Turn off sync on this phone</button>
+        )}
+      </div>
+    </Sheet>
+  );
+}
+
+function BankAccountSheet({ ledger, id, onSave, onClose }: {
+  ledger: Ledger;
+  id: string;
+  onSave: (l: Ledger) => void;
+  onClose: () => void;
+}) {
+  const acct = ledger.importAccounts?.[id];
+  const [target, setTarget] = useState(acct?.account ?? '');
+  if (!acct) return null;
+  const options = ledger.accounts.filter((a) => (isCard(a.name) || a.name.startsWith('Assets:')) && !a.closed);
+  return (
+    <Sheet title="Bank account" onClose={onClose}>
+      <div className="stack">
+        <p><strong>{acct.name}</strong> <span className="muted">· {acct.org}</span></p>
+        <label className="field">
+          <span>Import its transactions into</span>
+          <select className="input" value={target} onChange={(e) => setTarget(e.target.value)}>
+            <option value="">Don’t import this account</option>
+            {options.map((a) => <option key={a.name} value={a.name}>{a.label}</option>)}
+          </select>
+        </label>
+        <p className="tiny muted">Applies to future imports. Transactions already imported stay where they are.</p>
+        <button className="btn primary block" onClick={() => onSave({
+          ...ledger,
+          importAccounts: {
+            ...ledger.importAccounts,
+            [id]: { ...acct, account: target || null, updatedAt: new Date().toISOString() },
+          },
+        })}>Save</button>
       </div>
     </Sheet>
   );

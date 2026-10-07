@@ -43,9 +43,10 @@ describe('beancount', () => {
   it('round-trips the ledger', () => {
     const l = sample();
     const back = fromBeancount(toBeancount(l));
-    const byId = (x: Ledger) => [...x.transactions].sort((a, b) => a.id.localeCompare(b.id));
+    const strip = <T extends { updatedAt?: string }>(x: T) => ({ ...x, updatedAt: undefined });
+    const byId = (x: Ledger) => [...x.transactions].sort((a, b) => a.id.localeCompare(b.id)).map(strip);
     expect(byId(back)).toEqual(byId(l));
-    expect(back.budgets).toEqual(l.budgets);
+    expect(back.budgets.map(strip)).toEqual(l.budgets.map(strip));
     expect(back.title).toBe(l.title);
     const gas = back.accounts.find((a) => a.name === 'Expenses:Transport:Gas')!;
     expect(gas.label).toBe('Gas');

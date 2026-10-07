@@ -89,6 +89,11 @@ export function categories(ledger: Ledger) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Bank accounts, offered as "transfer" targets (e.g. paying the card from checking). */
+export function transferAccounts(ledger: Ledger) {
+  return ledger.accounts.filter((a) => a.name.startsWith('Assets:') && !a.closed);
+}
+
 /** "Food › Groceries"-style label with the parent group, for pickers. */
 export function categoryGroup(name: string): string {
   const parts = name.split(':');

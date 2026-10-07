@@ -9,6 +9,8 @@ export interface Account {
   label: string;
   open: string;
   closed?: boolean;
+  /** When this record last changed (ISO time). Used to merge edits from both phones. */
+  updatedAt?: string;
 }
 
 export interface Posting {
@@ -30,6 +32,7 @@ export interface Transaction {
   source: TxnSource;
   /** Id from the bank feed, used to avoid importing the same transaction twice. */
   externalId?: string;
+  updatedAt?: string;
 }
 
 export type BudgetMode = 'rollover' | 'fixed';
@@ -40,6 +43,7 @@ export interface BudgetEntry {
   from: string;
   amount: Cents;
   mode: BudgetMode;
+  updatedAt?: string;
 }
 
 export interface Ledger {
@@ -49,6 +53,38 @@ export interface Ledger {
   accounts: Account[];
   transactions: Transaction[];
   budgets: BudgetEntry[];
+  /** Deleted transactions (id -> when), so a deletion on one phone wins over an older copy on the other. */
+  tombstones?: Record<string, Tombstone>;
+  /** Set when the whole ledger was replaced (restore/import); older records from other phones are dropped. */
+  resetAt?: string;
+  /** Keys that bank imports are encrypted to. The private halves never leave the encrypted ledger. */
+  importKeys?: ImportKey[];
+  /** Bank-feed accounts seen so far, and which ledger account each one imports into (null = skip). */
+  importAccounts?: Record<string, ImportAccount>;
+  lastImportAt?: string;
+}
+
+export interface Tombstone {
+  at: string;
+  externalId?: string;
+}
+
+export interface ImportKey {
+  kid: string;
+  createdAt: string;
+  publicJwk: JsonWebKey;
+  privateJwk: JsonWebKey;
+}
+
+export interface ImportAccount {
+  name: string;
+  org: string;
+  account: string | null;
+  updatedAt?: string;
+}
+
+export function nowISO(): string {
+  return new Date().toISOString();
 }
 
 const ROOTS = ['Assets', 'Liabilities', 'Equity', 'Income', 'Expenses'] as const;
@@ -176,16 +212,17 @@ export function ensureAccounts(ledger: Ledger, t: Transaction): Ledger {
   for (const p of t.postings) {
     const existing = accounts.find((a) => a.name === p.account);
     if (!existing) {
-      accounts = [...accounts, { name: p.account, label: accountLabel(ledger, p.account), open: t.date }];
+      accounts = [...accounts, { name: p.account, label: accountLabel(ledger, p.account), open: t.date, updatedAt: nowISO() }];
     } else if (t.date < existing.open) {
-      accounts = accounts.map((a) => (a.name === p.account ? { ...a, open: t.date } : a));
+      accounts = accounts.map((a) => (a.name === p.account ? { ...a, open: t.date, updatedAt: nowISO() } : a));
     }
   }
   return accounts === ledger.accounts ? ledger : { ...ledger, accounts };
 }
 
-export function upsertTransaction(ledger: Ledger, t: Transaction): Ledger {
-  if (!txnBalances(t)) throw new Error('Transaction does not balance');
+export function upsertTransaction(ledger: Ledger, input: Transaction): Ledger {
+  if (!txnBalances(input)) throw new Error('Transaction does not balance');
+  const t = { ...input, updatedAt: nowISO() };
   const exists = ledger.transactions.some((x) => x.id === t.id);
   const transactions = exists
     ? ledger.transactions.map((x) => (x.id === t.id ? t : x))
@@ -194,7 +231,13 @@ export function upsertTransaction(ledger: Ledger, t: Transaction): Ledger {
 }
 
 export function deleteTransaction(ledger: Ledger, id: string): Ledger {
-  return { ...ledger, transactions: ledger.transactions.filter((t) => t.id !== id) };
+  const t = ledger.transactions.find((x) => x.id === id);
+  const tombstone: Tombstone = { at: nowISO(), ...(t?.externalId ? { externalId: t.externalId } : {}) };
+  return {
+    ...ledger,
+    transactions: ledger.transactions.filter((x) => x.id !== id),
+    tombstones: { ...ledger.tombstones, [id]: tombstone },
+  };
 }
 
 export function sortedTransactions(ledger: Ledger): Transaction[] {
@@ -204,17 +247,20 @@ export function sortedTransactions(ledger: Ledger): Transaction[] {
 export function addAccount(ledger: Ledger, name: string, label: string, open: string): Ledger {
   if (!isValidAccountName(name)) throw new Error(`Invalid account name: ${name}`);
   if (ledger.accounts.some((a) => a.name === name)) throw new Error('That account already exists');
-  return { ...ledger, accounts: [...ledger.accounts, { name, label, open }] };
+  return { ...ledger, accounts: [...ledger.accounts, { name, label, open, updatedAt: nowISO() }] };
 }
 
 export function updateAccount(ledger: Ledger, name: string, patch: Partial<Pick<Account, 'label' | 'closed'>>): Ledger {
-  return { ...ledger, accounts: ledger.accounts.map((a) => (a.name === name ? { ...a, ...patch } : a)) };
+  return {
+    ...ledger,
+    accounts: ledger.accounts.map((a) => (a.name === name ? { ...a, ...patch, updatedAt: nowISO() } : a)),
+  };
 }
 
 /** Set (or change) a category's budget starting from `from` month. Replaces an entry for the same month. */
 export function setBudget(ledger: Ledger, entry: BudgetEntry): Ledger {
   const budgets = ledger.budgets.filter((b) => !(b.account === entry.account && b.from === entry.from));
-  budgets.push(entry);
+  budgets.push({ ...entry, updatedAt: nowISO() });
   budgets.sort((a, b) => (a.from === b.from ? a.account.localeCompare(b.account) : a.from < b.from ? -1 : 1));
   return { ...ledger, budgets };
 }
@@ -226,4 +272,27 @@ export function assertLedger(x: unknown): asserts x is Ledger {
       !Array.isArray(l.transactions) || !Array.isArray(l.budgets)) {
     throw new Error('Not a valid ledger');
   }
+}
+
+/** Mark every record as new: used when the ledger is replaced by a restore or file import. */
+export function markReplaced(ledger: Ledger): Ledger {
+  const at = nowISO();
+  return {
+    ...ledger,
+    resetAt: at,
+    accounts: ledger.accounts.map((a) => ({ ...a, updatedAt: at })),
+    transactions: ledger.transactions.map((t) => ({ ...t, updatedAt: at })),
+    budgets: ledger.budgets.map((b) => ({ ...b, updatedAt: at })),
+    tombstones: {},
+  };
+}
+
+/** Mark the given transactions (default: all awaiting review) as reviewed. */
+export function approveTransactions(ledger: Ledger, ids?: Set<string>): Ledger {
+  const at = nowISO();
+  return {
+    ...ledger,
+    transactions: ledger.transactions.map((t) =>
+      t.flag === '!' && (!ids || ids.has(t.id)) ? { ...t, flag: '*', updatedAt: at } : t),
+  };
 }

@@ -23,6 +23,13 @@ export interface VaultRecord {
   data: EncryptedBlob;
   updatedAt: string;
   lastBackupAt?: string;
+  /** This phone's own settings (e.g. its GitHub token), encrypted with the household key. Never synced. */
+  device?: EncryptedBlob;
+}
+
+export interface DeviceSettings {
+  sync?: { repo: string; token: string; deviceName: string };
+  lastSyncAt?: string;
 }
 
 const DB_NAME = 'household-ledger';
@@ -108,6 +115,40 @@ export class Session {
     this.record = { ...this.record, lastBackupAt: new Date().toISOString() };
     await storeVault(this.record);
     return JSON.stringify(blob);
+  }
+
+  /** Encrypted contents for the synced ledger file. */
+  async sealForSync(ledger: Ledger): Promise<string> {
+    return JSON.stringify(await encryptJSON(this.key, this.keyId, ledger));
+  }
+
+  async openFromSync(text: string): Promise<Ledger> {
+    const blob = parseBlob(text);
+    if (blob.keyId !== this.keyId) {
+      throw new Error(
+        'The synced data was made with a different household key than this phone. Set this phone up again with the household key from the other phone.',
+      );
+    }
+    const ledger = await decryptJSON(this.key, blob);
+    assertLedger(ledger);
+    return ledger;
+  }
+
+  async deviceSettings(): Promise<DeviceSettings> {
+    if (!this.record.device) return {};
+    try {
+      return (await decryptJSON(this.key, this.record.device)) as DeviceSettings;
+    } catch {
+      return {};
+    }
+  }
+
+  async saveDeviceSettings(settings: DeviceSettings): Promise<void> {
+    const device = await encryptJSON(this.key, this.keyId, settings);
+    // Re-read so we don't clobber a ledger save that happened meanwhile.
+    const latest = (await loadVault()) ?? this.record;
+    this.record = { ...latest, device };
+    await storeVault(this.record);
   }
 
   async readBackup(text: string): Promise<Ledger> {

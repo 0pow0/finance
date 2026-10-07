@@ -5,7 +5,7 @@ import {
   type Ledger, type Transaction,
 } from '../lib/ledger';
 import { centsToDecimal, parseCents } from '../lib/money';
-import { Sheet, cards, categories, categoryGroup } from './common';
+import { Sheet, cards, categories, categoryGroup, transferAccounts } from './common';
 import { useConfirm } from './confirm';
 
 /** The most recent category and card used with this payee, to pre-fill the form. */
@@ -153,6 +153,9 @@ export function TxnEditor({ ledger, txn, onSave, onDelete, onClose }: {
                 {list.map((c) => <option key={c.name} value={c.name}>{c.label}</option>)}
               </optgroup>
             ))}
+            <optgroup label="Transfers">
+              {transferAccounts(ledger).map((c) => <option key={c.name} value={c.name}>Card payment from {c.label}</option>)}
+            </optgroup>
           </select>
         </div>
 

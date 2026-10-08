@@ -209,9 +209,14 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
     }
   }
 
-  const lastImportAt = [ledger.lastImportAt, payload.fetchedAt].filter(Boolean).sort().pop();
+  const newest = !ledger.lastImportAt || payload.fetchedAt >= ledger.lastImportAt;
+  const lastImportAt = newest ? payload.fetchedAt : ledger.lastImportAt;
+  const lastImportAccounts = newest ? payload.accounts.map((a) => a.id) : ledger.lastImportAccounts;
   return {
-    ledger: { ...ledger, accounts, importAccounts, transactions: [...ledger.transactions, ...added], lastImportAt },
+    ledger: {
+      ...ledger, accounts, importAccounts, transactions: [...ledger.transactions, ...added], lastImportAt,
+      ...(lastImportAccounts ? { lastImportAccounts } : {}),
+    },
     added: added.length,
   };
 }

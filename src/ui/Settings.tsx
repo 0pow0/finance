@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { fromBeancount, toBeancount } from '../lib/beancount';
 import { todayISO } from '../lib/dates';
 import {
-  SHARED, addAccount, isCard, isCategory, removePerson, renamePerson, setPeople, toAccountComponent, updateAccount,
+  SHARED, addAccount, isCard, isCategory, removePerson, renamePerson, setPeople, startOver, toAccountComponent, updateAccount,
   type Account, type Ledger,
 } from '../lib/ledger';
 import { checkPassphrase, eraseVault, type Session } from '../lib/vault';
@@ -82,7 +82,9 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
                 : 'Bank import arrives through sync. Set up sync first.'}
           </span>
         </div>
-        {Object.entries(ledger.importAccounts ?? {}).map(([id, a]) => (
+        {Object.entries(ledger.importAccounts ?? {})
+          .filter(([id]) => !ledger.lastImportAccounts || ledger.lastImportAccounts.includes(id))
+          .map(([id, a]) => (
           <button className="row" key={id} onClick={() => setDialog({ kind: 'bank', id })}>
             <span className="grow">
               <span className="title">{a.name}</span>
@@ -204,6 +206,17 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
         Your ledger is encrypted on this phone (AES-256). Backups are encrypted with your household key and can be
         stored anywhere — they can’t be read without it.
       </div>
+
+      <button className="btn danger block" onClick={async () => {
+        if (await ask({
+          title: 'Remove all transactions?',
+          message: `This removes all ${ledger.transactions.length} transactions on both phones. People, cards, categories, budgets and bank connections stay. Bank transactions come back with the next import.`,
+          confirmLabel: 'Remove all transactions', danger: true, typeToConfirm: 'DELETE',
+        })) {
+          onChange(startOver(ledger));
+          toast('All transactions removed');
+        }
+      }}>Start over: remove all transactions</button>
 
       <button className="btn danger block" onClick={async () => {
         if (await ask({

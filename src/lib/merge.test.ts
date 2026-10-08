@@ -70,3 +70,22 @@ describe('merge', () => {
     expect(chase).toMatchObject({ label: 'Chase Freedom', open: '2026-01-01' });
   });
 });
+
+describe('start over', () => {
+  it('clears transactions on both phones but keeps settings', async () => {
+    const { startOver, setPeople } = await import('./ledger');
+    tick();
+    let a = setPeople(add(newLedger('2026-10-01'), 'Old A').ledger, ['Rui', 'Ziqi']);
+    a = setBudget(a, { account: GROC, from: '2026-10', amount: 500, mode: 'rollover' });
+    const b = add(a, 'Old B').ledger; // other phone, synced earlier, has an extra old entry
+    tick();
+    const fresh = startOver(a);
+    const m = mergeLedgers(b, fresh);
+    expect(m.transactions).toHaveLength(0);
+    expect(m.people).toEqual(['Rui', 'Ziqi']);
+    expect(m.budgets).toHaveLength(1);
+    tick();
+    const after = add(m, 'New after start over').ledger;
+    expect(mergeLedgers(b, after).transactions.map((t) => t.payee)).toEqual(['New after start over']);
+  });
+});

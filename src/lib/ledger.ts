@@ -64,6 +64,8 @@ export interface Ledger {
   /** Bank-feed accounts seen so far, and which ledger account each one imports into (null = skip). */
   importAccounts?: Record<string, ImportAccount>;
   lastImportAt?: string;
+  /** Bank-feed account ids present in the most recent import (older ones were removed or re-linked). */
+  lastImportAccounts?: string[];
   /** Household members, for per-person spending. */
   people?: string[];
   peopleUpdatedAt?: string;
@@ -339,4 +341,20 @@ export function txnOwner(ledger: Ledger, t: Transaction, owners?: Map<string, st
 
 export function ownerMap(ledger: Ledger): Map<string, string | undefined> {
   return new Map(ledger.accounts.map((a) => [a.name, a.owner]));
+}
+
+/**
+ * Remove every transaction, on all synced phones, keeping people, cards, categories, budgets and
+ * bank-account mappings. Bank transactions come back on the next import.
+ */
+export function startOver(ledger: Ledger): Ledger {
+  const at = nowISO();
+  return {
+    ...ledger,
+    resetAt: at,
+    transactions: [],
+    tombstones: {},
+    accounts: ledger.accounts.map((a) => ({ ...a, updatedAt: at })),
+    budgets: ledger.budgets.map((b) => ({ ...b, updatedAt: at })),
+  };
 }

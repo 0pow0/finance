@@ -89,8 +89,9 @@ export function mergeLedgers(a: Ledger, b: Ledger): Ledger {
     merged.people = peopleSide.people;
     if (peopleSide.peopleUpdatedAt) merged.peopleUpdatedAt = peopleSide.peopleUpdatedAt;
   }
-  const lastImport = [a.lastImportAt, b.lastImportAt].filter(Boolean).sort().pop();
-  if (lastImport) merged.lastImportAt = lastImport;
+  const importSide = ts(a.lastImportAt) >= ts(b.lastImportAt) ? a : b;
+  if (importSide.lastImportAt) merged.lastImportAt = importSide.lastImportAt;
+  if (importSide.lastImportAccounts) merged.lastImportAccounts = importSide.lastImportAccounts;
   return merged;
 }
 

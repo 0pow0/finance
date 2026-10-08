@@ -30,6 +30,7 @@ export function App() {
   const [month, setMonth] = useState(monthOf(todayISO()));
   const [editing, setEditing] = useState<Transaction | 'new' | null>(null);
   const [reviewOnly, setReviewOnly] = useState(false);
+  const [person, setPerson] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState('');
   const [autoLock, setAutoLockState] = useState(readAutoLock);
   const lastActive = useRef(Date.now());
@@ -142,7 +143,8 @@ export function App() {
             </button>
           )}
           <Home ledger={ledger} month={month} setMonth={setMonth} onChange={commit} reviewCount={reviewCount}
-            onReview={() => { setReviewOnly(true); setTab('activity'); }} />
+            onReview={() => { setReviewOnly(true); setTab('activity'); }}
+            person={person} setPerson={setPerson} onOpenSettings={() => setTab('settings')} />
         </>
       )}
       {tab === 'activity' && (

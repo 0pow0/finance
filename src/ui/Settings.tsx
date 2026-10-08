@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { fromBeancount, toBeancount } from '../lib/beancount';
 import { todayISO } from '../lib/dates';
 import {
-  addAccount, isCard, isCategory, toAccountComponent, updateAccount,
+  SHARED, addAccount, isCard, isCategory, removePerson, renamePerson, setPeople, toAccountComponent, updateAccount,
   type Account, type Ledger,
 } from '../lib/ledger';
 import { checkPassphrase, eraseVault, type Session } from '../lib/vault';
@@ -16,6 +16,7 @@ type Dialog =
   | { kind: 'passphrase' }
   | { kind: 'reveal' }
   | { kind: 'sync' }
+  | { kind: 'person'; name?: string }
   | { kind: 'bank'; id: string };
 
 export function Settings({ session, ledger, onChange, onReplace, onLock, onErased, autoLock, setAutoLock, toast, sync }: {
@@ -94,11 +95,25 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
         ))}
       </div>
 
+      <h3>People</h3>
+      <div className="list">
+        {(ledger.people ?? []).map((p) => (
+          <button className="row" key={p} onClick={() => setDialog({ kind: 'person', name: p })}>
+            <span className="grow">{p}</span>
+            <span className="settings-row-value">
+              {cardAccounts.filter((a) => a.owner === p).length} card{cardAccounts.filter((a) => a.owner === p).length === 1 ? '' : 's'}
+            </span>
+          </button>
+        ))}
+        <button className="row" onClick={() => setDialog({ kind: 'person' })}><span className="grow">+ Add a person</span></button>
+      </div>
+
       <h3>Cards</h3>
       <div className="list">
         {cardAccounts.map((a) => (
           <button className="row" key={a.name} onClick={() => setDialog({ kind: 'account', type: 'card', account: a })}>
             <span className="grow">{a.label}</span>
+            <span className="settings-row-value">{a.owner ?? (ledger.people?.length ? 'No owner' : '')}</span>
             {a.closed && <span className="badge">Hidden</span>}
           </button>
         ))}
@@ -209,6 +224,10 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
       {dialog?.kind === 'passphrase' && <PassphraseSheet session={session} onClose={() => setDialog(null)} toast={toast} />}
       {dialog?.kind === 'reveal' && <RevealSheet session={session} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'sync' && <SyncSheet sync={sync} onClose={() => setDialog(null)} toast={toast} />}
+      {dialog?.kind === 'person' && (
+        <PersonSheet ledger={ledger} name={dialog.name} onClose={() => setDialog(null)}
+          onSave={(l) => { onChange(l); setDialog(null); }} />
+      )}
       {dialog?.kind === 'bank' && (
         <BankAccountSheet ledger={ledger} id={dialog.id} onClose={() => setDialog(null)}
           onSave={(l) => { onChange(l); setDialog(null); }} />
@@ -228,18 +247,21 @@ function AccountSheet({ ledger, type, account, onSave, onClose }: {
     .map((a) => a.name.split(':')[1]))].sort();
   const [label, setLabel] = useState(account?.label ?? '');
   const [group, setGroup] = useState('');
+  const [owner, setOwner] = useState(account?.owner ?? '');
   const [error, setError] = useState('');
 
   function save() {
     const name = label.trim();
     if (!name) return setError('Enter a name.');
     try {
-      if (account) return onSave(updateAccount(ledger, account.name, { label: name }));
+      const ownerPatch = type === 'card' ? { owner: owner || undefined } : {};
+      if (account) return onSave(updateAccount(ledger, account.name, { label: name, ...ownerPatch }));
       const component = toAccountComponent(name);
       const full = type === 'card'
         ? `Liabilities:CreditCard:${component}`
         : `Expenses:${group ? `${group}:` : ''}${component}`;
-      onSave(addAccount(ledger, full, name, todayISO()));
+      const added = addAccount(ledger, full, name, todayISO());
+      onSave(type === 'card' && owner ? updateAccount(added, full, ownerPatch) : added);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -261,6 +283,17 @@ function AccountSheet({ ledger, type, account, onSave, onClose }: {
               <option value="">None</option>
               {groups.map((g) => <option key={g} value={g}>{g.replace(/-/g, ' ')}</option>)}
             </select>
+          </label>
+        )}
+        {type === 'card' && (
+          <label className="field">
+            <span>Belongs to</span>
+            <select className="input" value={owner} onChange={(e) => setOwner(e.target.value)}>
+              <option value="">Not set</option>
+              {(ledger.people ?? []).map((p) => <option key={p} value={p}>{p}</option>)}
+              <option value={SHARED}>Shared (family card)</option>
+            </select>
+            {!ledger.people?.length && <span className="tiny muted">Add people in Settings → People first.</span>}
           </label>
         )}
         {account && <p className="tiny muted">Beancount account: {account.name}</p>}
@@ -464,6 +497,50 @@ function BankAccountSheet({ ledger, id, onSave, onClose }: {
           Turning an account on picks up its transactions from the next daily import (the last 10 days).
         </p>
         <button className="btn primary block" onClick={save}>Save</button>
+      </div>
+    </Sheet>
+  );
+}
+
+function PersonSheet({ ledger, name, onSave, onClose }: {
+  ledger: Ledger;
+  name?: string;
+  onSave: (l: Ledger) => void;
+  onClose: () => void;
+}) {
+  const ask = useConfirm();
+  const [value, setValue] = useState(name ?? '');
+  const [error, setError] = useState('');
+  const people = ledger.people ?? [];
+
+  function save() {
+    const v = value.trim();
+    if (!v) return setError('Enter a name.');
+    if (v === SHARED) return setError('“Shared” is reserved for family cards.');
+    if (v !== name && people.includes(v)) return setError('That name is already in the list.');
+    onSave(name ? renamePerson(ledger, name, v) : setPeople(ledger, [...people, v]));
+  }
+
+  return (
+    <Sheet title={name ? 'Edit person' : 'Add a person'} onClose={onClose}
+      action={<button className="btn link" onClick={save}><strong>Save</strong></button>}>
+      <div className="stack">
+        <label className="field">
+          <span>Name</span>
+          <input className="input" autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder="e.g. Rui" />
+        </label>
+        <p className="tiny muted">Then open Settings → Cards and choose whose each card is.</p>
+        {error && <p className="error">{error}</p>}
+        <button className="btn primary block" onClick={save}>Save</button>
+        {name && (
+          <button className="btn danger block" onClick={async () => {
+            if (await ask({
+              title: `Remove ${name}?`,
+              message: 'Their cards stay, but won’t have an owner until you pick one.',
+              confirmLabel: 'Remove', danger: true,
+            })) onSave(removePerson(ledger, name));
+          }}>Remove {name}</button>
+        )}
       </div>
     </Sheet>
   );

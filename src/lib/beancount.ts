@@ -43,6 +43,7 @@ export function toBeancount(ledger: Ledger): string {
     const open = used && used < a.open ? used : a.open;
     out.push(`${open} open ${a.name} ${ledger.currency}`);
     out.push(`  label: ${quote(a.label)}`);
+    if (a.owner) out.push(`  owner: ${quote(a.owner)}`);
   }
   out.push('');
 
@@ -148,7 +149,8 @@ export function fromBeancount(text: string): Ledger {
       if (cur && cur.split(',').some((c) => c !== 'USD')) {
         throw new BeancountParseError(b.line, `Only USD is supported (account ${name})`);
       }
-      accounts.set(name, { name, label: meta.get('label') ?? defaultLabel(name), open: date });
+      const owner = meta.get('owner');
+      accounts.set(name, { name, label: meta.get('label') ?? defaultLabel(name), open: date, ...(owner ? { owner } : {}) });
     } else if ((m = CLOSE_RE.exec(b.head))) {
       const acct = accounts.get(m[2]);
       if (acct) acct.closed = true;
@@ -215,6 +217,8 @@ export function fromBeancount(text: string): Ledger {
     }
   }
   ledger.accounts = [...accounts.values()];
+  const people = [...new Set(ledger.accounts.map((a) => a.owner).filter((o): o is string => !!o && o !== 'Shared'))];
+  if (people.length) ledger.people = people;
   return ledger;
 }
 

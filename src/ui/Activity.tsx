@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react';
-import { accountLabel, approveTransactions, sortedTransactions, txnAmount, txnSides, type Ledger, type Transaction } from '../lib/ledger';
+import {
+  SHARED, accountLabel, approveTransactions, isCard, ownerMap, sortedTransactions, txnAmount, txnOwner, txnSides,
+  type Ledger, type Transaction,
+} from '../lib/ledger';
 import { formatUSD } from '../lib/money';
 import { cards } from './common';
 
@@ -13,12 +16,16 @@ export function Activity({ ledger, onOpen, reviewOnly, setReviewOnly, onChange, 
 }) {
   const [query, setQuery] = useState('');
   const [card, setCard] = useState('');
+  const [who, setWho] = useState('');
+  const people = [...(ledger.people ?? []), ...(ledger.accounts.some((a) => isCard(a.name) && a.owner === SHARED) ? [SHARED] : [])];
   const [limit, setLimit] = useState(150);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const owners = ownerMap(ledger);
     return sortedTransactions(ledger).filter((t) => {
       if (reviewOnly && t.flag !== '!') return false;
+      if (who && txnOwner(ledger, t, owners) !== who) return false;
       if (card && !t.postings.some((p) => p.account === card)) return false;
       if (!q) return true;
       return (
@@ -27,7 +34,7 @@ export function Activity({ ledger, onOpen, reviewOnly, setReviewOnly, onChange, 
         t.postings.some((p) => accountLabel(ledger, p.account).toLowerCase().includes(q))
       );
     });
-  }, [ledger, query, card, reviewOnly]);
+  }, [ledger, query, card, reviewOnly, who]);
 
   const days = new Map<string, Transaction[]>();
   for (const t of filtered.slice(0, limit)) days.set(t.date, [...(days.get(t.date) ?? []), t]);
@@ -37,7 +44,10 @@ export function Activity({ ledger, onOpen, reviewOnly, setReviewOnly, onChange, 
       <h1>Activity</h1>
       <input className="input search" type="search" placeholder="Search payee, note, category" value={query} onChange={(e) => setQuery(e.target.value)} />
       <div className="chips">
-        <button className={`chip ${!card && !reviewOnly ? 'on' : ''}`} onClick={() => { setCard(''); setReviewOnly(false); }}>All</button>
+        <button className={`chip ${!card && !reviewOnly && !who ? 'on' : ''}`} onClick={() => { setCard(''); setWho(''); setReviewOnly(false); }}>All</button>
+        {people.map((p) => (
+          <button key={p} className={`chip ${who === p ? 'on' : ''}`} onClick={() => setWho(who === p ? '' : p)}>{p}</button>
+        ))}
         {cards(ledger).map((c) => (
           <button key={c.name} className={`chip ${card === c.name ? 'on' : ''}`} onClick={() => setCard(card === c.name ? '' : c.name)}>{c.label}</button>
         ))}

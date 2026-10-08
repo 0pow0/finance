@@ -1,19 +1,27 @@
 import { useMemo, useState } from 'react';
-import { budgetReport, entryFor, type BudgetRow } from '../lib/budget';
+import { budgetReport, categorySpending, entryFor, spendingByPerson, type BudgetRow } from '../lib/budget';
 import { addMonths, monthLabel, monthOf, todayISO } from '../lib/dates';
-import { accountLabel, setBudget, type BudgetMode, type Ledger } from '../lib/ledger';
+import { SHARED, accountLabel, isCard, setBudget, type BudgetMode, type Ledger } from '../lib/ledger';
 import { centsToDecimal, formatUSD, parseCents } from '../lib/money';
 import { Icon, Sheet, categories } from './common';
 
-export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview }: {
+export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview, person, setPerson, onOpenSettings }: {
   ledger: Ledger;
   month: string;
   setMonth: (m: string) => void;
   onChange: (l: Ledger) => void;
   reviewCount: number;
   onReview: () => void;
+  person: string | null;
+  setPerson: (p: string | null) => void;
+  onOpenSettings: () => void;
 }) {
   const report = useMemo(() => budgetReport(ledger, month), [ledger, month]);
+  const byPerson = useMemo(() => spendingByPerson(ledger, month), [ledger, month]);
+  const people = ledger.people ?? [];
+  const hasShared = ledger.accounts.some((a) => isCard(a.name) && a.owner === SHARED);
+  const views = [...people, ...(hasShared ? [SHARED] : [])];
+  const current = person && views.includes(person) ? person : null;
   const [editing, setEditing] = useState<{ account?: string } | null>(null);
   const thisMonth = monthOf(todayISO());
   const left = report.totalAvailable - report.rows
@@ -28,6 +36,15 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview 
         <button className="btn link" aria-label="Next month" disabled={month >= thisMonth} onClick={() => setMonth(addMonths(month, 1))}><Icon name="chevR" /></button>
       </div>
 
+      {views.length > 0 && (
+        <div className="seg" role="tablist" aria-label="Whose spending">
+          <button role="tab" aria-selected={!current} className={!current ? 'on' : ''} onClick={() => setPerson(null)}>Family</button>
+          {views.map((p) => (
+            <button key={p} role="tab" aria-selected={current === p} className={current === p ? 'on' : ''} onClick={() => setPerson(p)}>{p}</button>
+          ))}
+        </div>
+      )}
+
       {reviewCount > 0 && (
         <button className="card spread" onClick={onReview}>
           <span><strong>{reviewCount}</strong> new transaction{reviewCount === 1 ? '' : 's'} to review</span>
@@ -35,6 +52,8 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview 
         </button>
       )}
 
+      {current ? <PersonView ledger={ledger} month={month} person={current} total={byPerson.get(current) ?? 0}
+        familyTotal={report.totalSpent} /> : (<>
       <div className="card stack">
         <div className="spread">
           <div>
@@ -49,6 +68,9 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview 
           )}
         </div>
       </div>
+
+      <ByPerson ledger={ledger} byPerson={byPerson} views={views} total={report.totalSpent}
+        onPick={setPerson} onOpenSettings={onOpenSettings} />
 
       <div className="spread">
         <h3>Budgets</h3>
@@ -77,6 +99,8 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview 
           </div>
         </>
       )}
+
+      </>)}
 
       {editing && (
         <BudgetEditor ledger={ledger} account={editing.account} month={month}
@@ -169,5 +193,106 @@ function BudgetEditor({ ledger, account, month, onSave, onClose }: {
         )}
       </div>
     </Sheet>
+  );
+}
+
+function ByPerson({ ledger, byPerson, views, total, onPick, onOpenSettings }: {
+  ledger: Ledger;
+  byPerson: Map<string, number>;
+  views: string[];
+  total: number;
+  onPick: (p: string) => void;
+  onOpenSettings: () => void;
+}) {
+  if (!views.length) {
+    return (
+      <button className="card spread" onClick={onOpenSettings}>
+        <span className="small">See each person’s spending: add your names and pick whose card is whose.</span>
+        <span className="badge">Set up</span>
+      </button>
+    );
+  }
+  const unassigned = byPerson.get('') ?? 0;
+  const cardsWithoutOwner = ledger.accounts.filter((a) => isCard(a.name) && !a.closed && !a.owner).length;
+  return (
+    <>
+      <h3>By person</h3>
+      <div className="list">
+        {views.map((p) => {
+          const amt = byPerson.get(p) ?? 0;
+          const pct = total > 0 ? Math.max(0, Math.min(100, (amt / total) * 100)) : 0;
+          return (
+            <button className="row" key={p} onClick={() => onPick(p)}>
+              <div className="grow stack" style={{ gap: 6 }}>
+                <div className="spread">
+                  <span className="title">{p}</span>
+                  <span className="amt">{formatUSD(amt)}</span>
+                </div>
+                <div className="bar person"><div style={{ width: `${pct}%` }} /></div>
+              </div>
+            </button>
+          );
+        })}
+        {(unassigned !== 0 || cardsWithoutOwner > 0) && (
+          <button className="row" onClick={onOpenSettings}>
+            <span className="grow small muted">
+              {unassigned !== 0 ? `${formatUSD(unassigned)} on cards without an owner. ` : ''}
+              {cardsWithoutOwner > 0 ? `${cardsWithoutOwner} card${cardsWithoutOwner === 1 ? '' : 's'} need an owner.` : ''}
+            </span>
+            <span className="badge">Assign</span>
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
+function PersonView({ ledger, month, person, total, familyTotal }: {
+  ledger: Ledger;
+  month: string;
+  person: string;
+  total: number;
+  familyTotal: number;
+}) {
+  const cats = categorySpending(ledger, month, person);
+  const max = Math.max(1, ...cats.map((c) => c.spent));
+  const cardNames = ledger.accounts.filter((a) => isCard(a.name) && a.owner === person).map((a) => a.label);
+  return (
+    <>
+      <div className="card stack">
+        <div className="spread">
+          <div>
+            <p className="muted small">{person === SHARED ? 'Shared cards spent' : `${person} spent`}</p>
+            <p className="big-number">{formatUSD(total)}</p>
+          </div>
+          {familyTotal > 0 && (
+            <div className="right">
+              <p className="muted small">Share of family</p>
+              <p className="big-number">{Math.round((total / familyTotal) * 100)}%</p>
+            </div>
+          )}
+        </div>
+        <p className="tiny muted">{cardNames.length ? `Cards: ${cardNames.join(', ')}` : 'No cards assigned yet (Settings → Cards).'}</p>
+      </div>
+      <h3>By category</h3>
+      {cats.length === 0 ? (
+        <div className="card muted small">No spending this month.</div>
+      ) : (
+        <div className="list">
+          {cats.map((c) => (
+            <div className="row" key={c.account}>
+              <div className="grow stack" style={{ gap: 6 }}>
+                <div className="spread">
+                  <span className="title">{accountLabel(ledger, c.account)}</span>
+                  <span className="amt">{formatUSD(c.spent)}</span>
+                </div>
+                <div className="bar person"><div style={{ width: `${Math.max(0, (c.spent / max) * 100)}%` }} /></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="tiny muted">Budgets are for the whole family. Switch to Family to see them.</p>
+    </>
   );
 }

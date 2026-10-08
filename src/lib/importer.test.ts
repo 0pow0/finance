@@ -103,3 +103,31 @@ describe('non-card accounts', () => {
     expect(applyImport(res.ledger, payload(txns, accounts)).added).toBe(0);
   });
 });
+
+describe('re-linked bank accounts', () => {
+  it('reuses the card and skips transactions already imported under the old id', () => {
+    const before = [{ id: 'old-amex', name: 'Gold Card', org: 'American Express', currency: 'USD' }];
+    const t1 = { posted: unix('2026-10-03'), amount: '-30.00', description: 'WHOLE FOODS #10' };
+    let { ledger } = applyImport(newLedger('2026-10-01'), payload([{ id: 'a', account: 'old-amex', ...t1 }], before));
+    expect(ledger.transactions).toHaveLength(1);
+
+    // Reconnected in SimpleFIN: same card, new account id and new transaction ids.
+    const after = [{ id: 'new-amex', name: 'Gold Card', org: 'American Express', currency: 'USD' }];
+    const t2 = { posted: unix('2026-10-05'), amount: '-12.00', description: 'UBER TRIP' };
+    const res = applyImport(ledger, payload([{ id: 'x', account: 'new-amex', ...t1 }, { id: 'y', account: 'new-amex', ...t2 }], after));
+    ledger = res.ledger;
+    expect(res.added).toBe(1);
+    expect(ledger.importAccounts!['new-amex'].account).toBe('Liabilities:CreditCard:Amex');
+    expect(ledger.accounts.filter((a) => a.name.startsWith('Liabilities:CreditCard:'))).toHaveLength(2); // Chase + Amex only
+    expect(ledger.transactions.map((t) => t.payee).sort()).toEqual(['Uber Trip', 'Whole Foods']);
+  });
+
+  it('two different people with same-named cards stay separate', () => {
+    const accts = [
+      { id: 'a1', name: 'Gold Card', org: 'American Express', currency: 'USD' },
+      { id: 'a2', name: 'Gold Card', org: 'American Express', currency: 'USD' },
+    ];
+    const { ledger } = applyImport(newLedger('2026-10-01'), payload([], accts));
+    expect(ledger.importAccounts!.a1.account).not.toBe(ledger.importAccounts!.a2.account);
+  });
+});

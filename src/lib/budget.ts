@@ -1,5 +1,5 @@
 import { addMonths, monthOf } from './dates';
-import { isCategory, type BudgetEntry, type BudgetMode, type Ledger } from './ledger';
+import { isCategory, ownerMap, txnOwner, type BudgetEntry, type BudgetMode, type Ledger } from './ledger';
 import type { Cents } from './money';
 
 export interface BudgetRow {
@@ -97,4 +97,30 @@ export function budgetReport(ledger: Ledger, month: string): MonthReport {
     totalSpent,
     totalAvailable: topLevel.reduce((s, r) => s + r.available, 0),
   };
+}
+
+/** Spending per category in a month, optionally only one person's (by card owner). */
+export function categorySpending(ledger: Ledger, month: string, person?: string): Array<{ account: string; spent: Cents }> {
+  const owners = ownerMap(ledger);
+  const totals = new Map<string, Cents>();
+  for (const t of ledger.transactions) {
+    if (monthOf(t.date) !== month) continue;
+    if (person !== undefined && txnOwner(ledger, t, owners) !== person) continue;
+    for (const p of t.postings) if (isCategory(p.account)) totals.set(p.account, (totals.get(p.account) ?? 0) + p.amount);
+  }
+  return [...totals].filter(([, v]) => v !== 0).map(([account, spent]) => ({ account, spent })).sort((a, b) => b.spent - a.spent);
+}
+
+/** Total spending per card owner in a month. Key '' = cards without an owner. */
+export function spendingByPerson(ledger: Ledger, month: string): Map<string, Cents> {
+  const owners = ownerMap(ledger);
+  const out = new Map<string, Cents>();
+  for (const t of ledger.transactions) {
+    if (monthOf(t.date) !== month) continue;
+    const spent = t.postings.filter((p) => isCategory(p.account)).reduce((s, p) => s + p.amount, 0);
+    if (!spent) continue;
+    const who = txnOwner(ledger, t, owners) ?? '';
+    out.set(who, (out.get(who) ?? 0) + spent);
+  }
+  return out;
 }

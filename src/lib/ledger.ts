@@ -9,6 +9,8 @@ export interface Account {
   label: string;
   open: string;
   closed?: boolean;
+  /** For cards: whose card it is (a name from `people`, or SHARED). */
+  owner?: string;
   /** When this record last changed (ISO time). Used to merge edits from both phones. */
   updatedAt?: string;
 }
@@ -62,7 +64,12 @@ export interface Ledger {
   /** Bank-feed accounts seen so far, and which ledger account each one imports into (null = skip). */
   importAccounts?: Record<string, ImportAccount>;
   lastImportAt?: string;
+  /** Household members, for per-person spending. */
+  people?: string[];
+  peopleUpdatedAt?: string;
 }
+
+export const SHARED = 'Shared';
 
 export interface Tombstone {
   at: string;
@@ -250,7 +257,7 @@ export function addAccount(ledger: Ledger, name: string, label: string, open: st
   return { ...ledger, accounts: [...ledger.accounts, { name, label, open, updatedAt: nowISO() }] };
 }
 
-export function updateAccount(ledger: Ledger, name: string, patch: Partial<Pick<Account, 'label' | 'closed'>>): Ledger {
+export function updateAccount(ledger: Ledger, name: string, patch: Partial<Pick<Account, 'label' | 'closed' | 'owner'>>): Ledger {
   return {
     ...ledger,
     accounts: ledger.accounts.map((a) => (a.name === name ? { ...a, ...patch, updatedAt: nowISO() } : a)),
@@ -295,4 +302,41 @@ export function approveTransactions(ledger: Ledger, ids?: Set<string>): Ledger {
     transactions: ledger.transactions.map((t) =>
       t.flag === '!' && (!ids || ids.has(t.id)) ? { ...t, flag: '*', updatedAt: at } : t),
   };
+}
+
+export function setPeople(ledger: Ledger, names: string[]): Ledger {
+  const people = [...new Set(names.map((n) => n.trim()).filter((n) => n && n !== SHARED))];
+  return { ...ledger, people, peopleUpdatedAt: nowISO() };
+}
+
+/** Rename a person everywhere (their cards follow). */
+export function renamePerson(ledger: Ledger, from: string, to: string): Ledger {
+  const name = to.trim();
+  if (!name || name === from) return ledger;
+  const at = nowISO();
+  return {
+    ...setPeople(ledger, (ledger.people ?? []).map((p) => (p === from ? name : p))),
+    accounts: ledger.accounts.map((a) => (a.owner === from ? { ...a, owner: name, updatedAt: at } : a)),
+  };
+}
+
+/** Remove a person; their cards become unassigned. */
+export function removePerson(ledger: Ledger, name: string): Ledger {
+  const at = nowISO();
+  return {
+    ...setPeople(ledger, (ledger.people ?? []).filter((p) => p !== name)),
+    accounts: ledger.accounts.map((a) => (a.owner === name ? { ...a, owner: undefined, updatedAt: at } : a)),
+  };
+}
+
+/** Whose spending a transaction is: the owner of the card (or bank account) it was paid with. */
+export function txnOwner(ledger: Ledger, t: Transaction, owners?: Map<string, string | undefined>): string | undefined {
+  const from = t.postings.find((p) => p.account.startsWith('Liabilities:') || p.account.startsWith('Assets:'));
+  if (!from) return undefined;
+  if (owners) return owners.get(from.account);
+  return ledger.accounts.find((a) => a.name === from.account)?.owner;
+}
+
+export function ownerMap(ledger: Ledger): Map<string, string | undefined> {
+  return new Map(ledger.accounts.map((a) => [a.name, a.owner]));
 }

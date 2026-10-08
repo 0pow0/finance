@@ -33,7 +33,7 @@ export function assertPayload(x: unknown): asserts x is ImportPayload {
 export function cleanPayee(raw: string): string {
   let s = raw.trim().replace(/\s+/g, ' ');
   s = s.replace(/^(SQ|TST|PY|SP|DD|PP|IC|GOOGLE|PAYPAL|APL|AMZN MKTP US)\s*\*\s*/i, '');
-  s = s.replace(/\s+#?\d{3,}.*$/, ''); // store numbers and what follows
+  s = s.replace(/\s+(#\d+|\d{3,}).*$/, ''); // store numbers and what follows
   s = s.replace(/\s+[A-Z][A-Za-z]+\s+[A-Z]{2}$/, (m) => (/[a-z]/.test(m) ? m : '')); // trailing "CITY ST"
   s = s.replace(/[*#]+\s*$/, '').trim();
   if (!s) s = raw.trim();
@@ -116,8 +116,20 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
   const importAccounts: Record<string, ImportAccount> = { ...ledger.importAccounts };
 
   const mapped = new Set(Object.values(importAccounts).map((a) => a.account).filter((a): a is string => !!a));
+  // Accounts we knew before but that are missing from this import: likely re-linked under a new id.
+  const inPayload = new Set(payload.accounts.map((a) => a.id));
+  const gone = new Map(Object.entries(importAccounts).filter(([id]) => !inPayload.has(id)));
+  const relinkedFrom = new Map<string, string>(); // new id -> old id
+  const same = (x: string, y: string) => x.trim().toLowerCase() === y.trim().toLowerCase();
   for (const a of payload.accounts) {
     if (importAccounts[a.id]) continue;
+    const old = [...gone].find(([, o]) => same(o.name, a.name) && same(o.org, a.org));
+    if (old) {
+      gone.delete(old[0]);
+      relinkedFrom.set(a.id, old[0]);
+      importAccounts[a.id] = { name: a.name, org: a.org, account: old[1].account, updatedAt: now };
+      continue;
+    }
     if ((a.currency && a.currency !== 'USD') || looksLikeBankAccount(a)) {
       importAccounts[a.id] = { name: a.name, org: a.org, account: null, updatedAt: now };
       continue;
@@ -131,6 +143,19 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
   const seen = new Set<string>();
   for (const t of ledger.transactions) if (t.externalId) seen.add(t.externalId);
   for (const tomb of Object.values(ledger.tombstones ?? {})) if (tomb.externalId) seen.add(tomb.externalId);
+
+  // For re-linked accounts the bank ids change too, so also match on card, date, amount and description.
+  const fingerprint = (card: string, date: string, cents: number, desc: string) => `${card}|${date}|${cents}|${desc.trim().toLowerCase()}`;
+  const existing = new Map<string, number>();
+  if (relinkedFrom.size) {
+    for (const t of ledger.transactions) {
+      if (t.source !== 'simplefin') continue;
+      const card = t.postings.find((p) => isCard(p.account));
+      if (!card) continue;
+      const key = fingerprint(card.account, t.date, card.amount, t.narration || t.payee);
+      existing.set(key, (existing.get(key) ?? 0) + 1);
+    }
+  }
 
   const working: Ledger = { ...ledger, accounts };
   const added: Transaction[] = [];
@@ -147,11 +172,20 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
     const raw = (t.payee || t.description || '').trim();
     const payee = cleanPayee(raw) || 'Unknown';
     const spend = -bankAmount; // card purchases come as negative amounts
+    const date = localDate(t.transactedAt || t.posted);
+    if (relinkedFrom.has(t.account)) {
+      const key = fingerprint(target, date, -spend, raw !== payee ? raw : payee);
+      const n = existing.get(key) ?? 0;
+      if (n > 0) {
+        existing.set(key, n - 1);
+        continue;
+      }
+    }
     const isPayment = spend < 0 && PAYMENT_RE.test(raw);
     const other = isPayment ? 'Assets:Bank:Checking' : guessCategory(working, payee, raw);
     added.push({
       id: newId(),
-      date: localDate(t.transactedAt || t.posted),
+      date,
       flag: '!',
       payee: isPayment ? 'Card payment' : payee,
       narration: raw !== payee ? raw : '',

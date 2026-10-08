@@ -161,9 +161,11 @@ export function TxnEditor({ ledger, txn, onSave, onDelete, onClose }: {
 
         <div className="field">
           <span>Card</span>
-          <div className="seg">
+          <div className="chips">
             {cardList.map((c) => (
-              <button key={c.name} className={card === c.name ? 'on' : ''} onClick={() => setCard(c.name)}>{c.label}</button>
+              <button key={c.name} className={`chip ${card === c.name ? 'on' : ''}`} onClick={() => setCard(c.name)}>
+                {c.label}{c.owner ? <span className="chip-owner"> · {c.owner}</span> : null}
+              </button>
             ))}
           </div>
         </div>

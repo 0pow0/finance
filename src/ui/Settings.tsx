@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { fromBeancount, toBeancount } from '../lib/beancount';
 import { todayISO } from '../lib/dates';
 import {
-  SHARED, addAccount, isCard, isCategory, removePerson, renamePerson, setPeople, startOver, toAccountComponent, updateAccount,
+  SHARED, addAccount, deleteAccounts, isAccountUsed, isCard, isCategory, removePerson, renamePerson, setPeople, startOver, toAccountComponent, updateAccount,
   type Account, type Ledger,
 } from '../lib/ledger';
 import { checkPassphrase, eraseVault, type Session } from '../lib/vault';
 import { Sheet, categoryGroup, readFileText, saveFile } from './common';
 import { useConfirm } from './confirm';
+import { createPasskey } from '../lib/passkey';
 import { describeStatus, timeAgo, type SyncControls } from './useSync';
 import { importedCount, removeUnreviewedImports } from '../lib/importer';
 
@@ -17,6 +18,7 @@ type Dialog =
   | { kind: 'reveal' }
   | { kind: 'sync' }
   | { kind: 'person'; name?: string }
+  | { kind: 'faceid' }
   | { kind: 'bank'; id: string };
 
 export function Settings({ session, ledger, onChange, onReplace, onLock, onErased, autoLock, setAutoLock, toast, sync }: {
@@ -33,8 +35,13 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
 }) {
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const ask = useConfirm();
-  const cardAccounts = ledger.accounts.filter((a) => isCard(a.name));
-  const catAccounts = ledger.accounts.filter((a) => isCategory(a.name)).sort((a, b) => a.name.localeCompare(b.name));
+  const [showHidden, setShowHidden] = useState(false);
+  const [, setFaceIdTick] = useState(0); // re-render after Face ID changes
+  const cardAccounts = ledger.accounts.filter((a) => isCard(a.name) && !a.deleted);
+  const activeCards = cardAccounts.filter((a) => !a.closed);
+  const hiddenCards = cardAccounts.filter((a) => a.closed);
+  const unusedOwnerless = activeCards.filter((a) => !a.owner && !isAccountUsed(ledger, a.name));
+  const catAccounts = ledger.accounts.filter((a) => isCategory(a.name) && !a.deleted).sort((a, b) => a.name.localeCompare(b.name));
   const lastBackup = session.lastBackupAt ? new Date(session.lastBackupAt).toLocaleDateString() : 'never';
 
   async function guard(fn: () => Promise<void>) {
@@ -112,7 +119,7 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
 
       <h3>Cards</h3>
       <div className="list">
-        {cardAccounts.map((a) => (
+        {(showHidden ? cardAccounts : activeCards).map((a) => (
           <button className="row" key={a.name} onClick={() => setDialog({ kind: 'account', type: 'card', account: a })}>
             <span className="grow">{a.label}</span>
             <span className="settings-row-value">{a.owner ?? (ledger.people?.length ? 'No owner' : '')}</span>
@@ -120,7 +127,24 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
           </button>
         ))}
         <button className="row" onClick={() => setDialog({ kind: 'account', type: 'card' })}><span className="grow">+ Add a card</span></button>
+        {hiddenCards.length > 0 && (
+          <button className="row" onClick={() => setShowHidden(!showHidden)}>
+            <span className="grow small muted">{showHidden ? 'Hide' : 'Show'} {hiddenCards.length} hidden card{hiddenCards.length === 1 ? '' : 's'}</span>
+          </button>
+        )}
       </div>
+      {unusedOwnerless.length > 0 && (
+        <button className="btn block" onClick={async () => {
+          if (await ask({
+            title: `Remove ${unusedOwnerless.length} unused card${unusedOwnerless.length === 1 ? '' : 's'}?`,
+            message: `${unusedOwnerless.map((a) => a.label).join(', ')}. These have no owner, no transactions and no bank connection.`,
+            confirmLabel: 'Remove', danger: true,
+          })) {
+            onChange(deleteAccounts(ledger, unusedOwnerless.map((a) => a.name)));
+            toast('Removed');
+          }
+        }}>Remove {unusedOwnerless.length} unused card{unusedOwnerless.length === 1 ? '' : 's'} without an owner</button>
+      )}
 
       <h3>Categories</h3>
       <div className="list">
@@ -197,6 +221,17 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
             <option value={60}>1 hour</option>
           </select>
         </div>
+        <button className="row" onClick={async () => {
+          if (!session.hasPasskey) return setDialog({ kind: 'faceid' });
+          if (await ask({ title: 'Turn off Face ID?', message: 'You’ll unlock with your passphrase on this phone.', confirmLabel: 'Turn off' })) {
+            await session.disablePasskey();
+            toast('Face ID turned off');
+            setFaceIdTick((n) => n + 1);
+          }
+        }}>
+          <span className="grow">Unlock with Face ID</span>
+          <span className="settings-row-value">{session.hasPasskey ? 'On' : 'Off'}</span>
+        </button>
         <button className="row" onClick={() => setDialog({ kind: 'passphrase' })}><span className="grow">Change passphrase</span></button>
         <button className="row" onClick={() => setDialog({ kind: 'reveal' })}><span className="grow">Show household key</span></button>
         <button className="row" onClick={onLock}><span className="grow">Lock now</span></button>
@@ -236,6 +271,10 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
       )}
       {dialog?.kind === 'passphrase' && <PassphraseSheet session={session} onClose={() => setDialog(null)} toast={toast} />}
       {dialog?.kind === 'reveal' && <RevealSheet session={session} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'faceid' && (
+        <FaceIdSheet session={session} onClose={() => setDialog(null)}
+          onDone={() => { setDialog(null); setFaceIdTick((n) => n + 1); toast('Face ID is on for this phone'); }} />
+      )}
       {dialog?.kind === 'sync' && <SyncSheet sync={sync} onClose={() => setDialog(null)} toast={toast} />}
       {dialog?.kind === 'person' && (
         <PersonSheet ledger={ledger} name={dialog.name} onClose={() => setDialog(null)}
@@ -256,6 +295,7 @@ function AccountSheet({ ledger, type, account, onSave, onClose }: {
   onSave: (l: Ledger) => void;
   onClose: () => void;
 }) {
+  const ask = useConfirm();
   const groups = [...new Set(ledger.accounts.filter((a) => isCategory(a.name) && a.name.split(':').length > 2)
     .map((a) => a.name.split(':')[1]))].sort();
   const [label, setLabel] = useState(account?.label ?? '');
@@ -317,6 +357,15 @@ function AccountSheet({ ledger, type, account, onSave, onClose }: {
             {account.closed ? 'Show in pickers again' : 'Hide from pickers'}
           </button>
         )}
+        {account && (isAccountUsed(ledger, account.name) ? (
+          <p className="tiny muted">This {type} has transactions{type === 'card' ? ' or a bank connection' : ''}, so it can be hidden but not removed.</p>
+        ) : (
+          <button className="btn danger block" onClick={async () => {
+            if (await ask({ title: `Remove ${account.label}?`, message: 'It has no transactions, so nothing else changes.', confirmLabel: 'Remove', danger: true })) {
+              onSave(deleteAccounts(ledger, [account.name]));
+            }
+          }}>Remove {type === 'card' ? 'card' : 'category'}</button>
+        ))}
       </div>
     </Sheet>
   );
@@ -554,6 +603,39 @@ function PersonSheet({ ledger, name, onSave, onClose }: {
             })) onSave(removePerson(ledger, name));
           }}>Remove {name}</button>
         )}
+      </div>
+    </Sheet>
+  );
+}
+
+function FaceIdSheet({ session, onClose, onDone }: { session: Session; onClose: () => void; onDone: () => void }) {
+  const [pass, setPass] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <Sheet title="Face ID" onClose={onClose}>
+      <div className="stack">
+        <p className="small">
+          Unlock this phone’s ledger with Face ID instead of typing your passphrase. Your passphrase still works as a
+          backup. This creates a passkey for Household Ledger on this phone.
+        </p>
+        <label className="field"><span>Enter your passphrase to turn it on</span>
+          <input className="input" type="password" autoComplete="current-password" value={pass} onChange={(e) => setPass(e.target.value)} />
+        </label>
+        {error && <p className="error">{error}</p>}
+        <button className="btn primary block" disabled={busy || !pass} onClick={async () => {
+          setBusy(true);
+          setError('');
+          try {
+            await session.enablePasskey(pass, () => createPasskey('Household Ledger'));
+            onDone();
+          } catch (e) {
+            const err = e as Error;
+            setError(err.name === 'NotAllowedError' ? 'Face ID was cancelled. Try again when you’re ready.' : err.message);
+          } finally {
+            setBusy(false);
+          }
+        }}>{busy ? 'Waiting for Face ID…' : 'Turn on Face ID'}</button>
       </div>
     </Sheet>
   );

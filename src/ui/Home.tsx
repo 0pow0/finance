@@ -1,11 +1,14 @@
 import { useMemo, useState } from 'react';
 import { budgetReport, categorySpending, entryFor, spendingByPerson, type BudgetRow } from '../lib/budget';
 import { addMonths, monthLabel, monthOf, todayISO } from '../lib/dates';
-import { SHARED, accountLabel, isCard, setBudget, type BudgetMode, type Ledger } from '../lib/ledger';
+import {
+  SHARED, accountLabel, isCard, ownerMap, setBudget, sortedTransactions, txnOwner, txnSides,
+  type BudgetMode, type Ledger, type Transaction,
+} from '../lib/ledger';
 import { centsToDecimal, formatUSD, parseCents } from '../lib/money';
 import { Icon, Sheet, categories } from './common';
 
-export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview, person, setPerson, onOpenSettings }: {
+export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview, person, setPerson, onOpenSettings, onOpenTxn }: {
   ledger: Ledger;
   month: string;
   setMonth: (m: string) => void;
@@ -15,7 +18,9 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
   person: string | null;
   setPerson: (p: string | null) => void;
   onOpenSettings: () => void;
+  onOpenTxn: (t: Transaction) => void;
 }) {
+  const [viewing, setViewing] = useState<string | null>(null);
   const report = useMemo(() => budgetReport(ledger, month), [ledger, month]);
   const byPerson = useMemo(() => spendingByPerson(ledger, month), [ledger, month]);
   const people = ledger.people ?? [];
@@ -53,7 +58,7 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
       )}
 
       {current ? <PersonView ledger={ledger} month={month} person={current} total={byPerson.get(current) ?? 0}
-        familyTotal={report.totalSpent} /> : (<>
+        familyTotal={report.totalSpent} onPick={setViewing} /> : (<>
       <div className="card stack">
         <div className="spread">
           <div>
@@ -82,7 +87,7 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
         </div>
       ) : (
         <div className="list">
-          {report.rows.map((r) => <BudgetLine key={r.account} ledger={ledger} row={r} onClick={() => setEditing({ account: r.account })} />)}
+          {report.rows.map((r) => <BudgetLine key={r.account} ledger={ledger} row={r} onClick={() => setViewing(r.account)} />)}
         </div>
       )}
 
@@ -91,7 +96,7 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
           <h3>Other spending</h3>
           <div className="list">
             {report.unbudgeted.map((u) => (
-              <button className="row" key={u.account} onClick={() => setEditing({ account: u.account })}>
+              <button className="row" key={u.account} onClick={() => setViewing(u.account)}>
                 <span className="grow title">{accountLabel(ledger, u.account)}</span>
                 <span className="amt">{formatUSD(u.spent)}</span>
               </button>
@@ -101,6 +106,13 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
       )}
 
       </>)}
+
+      {viewing && (
+        <CategorySheet ledger={ledger} account={viewing} month={month} person={current}
+          onClose={() => setViewing(null)}
+          onOpenTxn={(t) => { setViewing(null); onOpenTxn(t); }}
+          onEditBudget={() => { setEditing({ account: viewing }); setViewing(null); }} />
+      )}
 
       {editing && (
         <BudgetEditor ledger={ledger} account={editing.account} month={month}
@@ -247,12 +259,13 @@ function ByPerson({ ledger, byPerson, views, total, onPick, onOpenSettings }: {
   );
 }
 
-function PersonView({ ledger, month, person, total, familyTotal }: {
+function PersonView({ ledger, month, person, total, familyTotal, onPick }: {
   ledger: Ledger;
   month: string;
   person: string;
   total: number;
   familyTotal: number;
+  onPick: (account: string) => void;
 }) {
   const cats = categorySpending(ledger, month, person);
   const max = Math.max(1, ...cats.map((c) => c.spent));
@@ -280,7 +293,7 @@ function PersonView({ ledger, month, person, total, familyTotal }: {
       ) : (
         <div className="list">
           {cats.map((c) => (
-            <div className="row" key={c.account}>
+            <button className="row" key={c.account} onClick={() => onPick(c.account)}>
               <div className="grow stack" style={{ gap: 6 }}>
                 <div className="spread">
                   <span className="title">{accountLabel(ledger, c.account)}</span>
@@ -288,11 +301,69 @@ function PersonView({ ledger, month, person, total, familyTotal }: {
                 </div>
                 <div className="bar person"><div style={{ width: `${Math.max(0, (c.spent / max) * 100)}%` }} /></div>
               </div>
-            </div>
+            </button>
           ))}
         </div>
       )}
       <p className="tiny muted">Budgets are for the whole family. Switch to Family to see them.</p>
     </>
+  );
+}
+
+/** The transactions behind one category's total for the month (and person, if one is selected). */
+function CategorySheet({ ledger, account, month, person, onClose, onOpenTxn, onEditBudget }: {
+  ledger: Ledger;
+  account: string;
+  month: string;
+  person: string | null;
+  onClose: () => void;
+  onOpenTxn: (t: Transaction) => void;
+  onEditBudget: () => void;
+}) {
+  const owners = ownerMap(ledger);
+  const inCategory = (a: string) => a === account || a.startsWith(account + ':');
+  const rows = sortedTransactions(ledger)
+    .filter((t) => t.date.startsWith(month) && (!person || txnOwner(ledger, t, owners) === person))
+    .map((t) => ({ t, amount: t.postings.filter((p) => inCategory(p.account)).reduce((s, p) => s + p.amount, 0) }))
+    .filter((r) => r.amount !== 0);
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  const hasBudget = ledger.budgets.some((b) => b.account === account);
+
+  return (
+    <Sheet title={accountLabel(ledger, account)} onClose={onClose}>
+      <div className="stack">
+        <div className="spread">
+          <span className="muted small">{monthLabel(month)}{person ? ` · ${person}` : ''}</span>
+          <span className="amt"><strong>{formatUSD(total)}</strong></span>
+        </div>
+        {rows.length === 0 ? (
+          <div className="card muted small">No transactions in this category this month.</div>
+        ) : (
+          <div className="list">
+            {rows.map(({ t, amount }) => {
+              const { from } = txnSides(t);
+              const card = from ? ledger.accounts.find((a) => a.name === from.account) : undefined;
+              return (
+                <button className="row" key={t.id} onClick={() => onOpenTxn(t)}>
+                  <div className="grow">
+                    <div className="title">
+                      {t.payee || t.narration || '(no payee)'} {t.flag === '!' && <span className="badge review">Review</span>}
+                    </div>
+                    <div className="tiny muted title">
+                      {new Date(`${t.date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      {card ? ` · ${card.label}` : ''}{card?.owner && !person ? ` · ${card.owner}` : ''}
+                    </div>
+                  </div>
+                  <span className={`amt ${amount < 0 ? 'good' : ''}`}>{amount < 0 ? `+${formatUSD(-amount)}` : formatUSD(amount)}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {!person && (
+          <button className="btn block" onClick={onEditBudget}>{hasBudget ? 'Edit budget' : 'Set a monthly budget'}</button>
+        )}
+      </div>
+    </Sheet>
   );
 }

@@ -70,3 +70,29 @@ describe('forgotten passphrase', () => {
     await expect(resetPassphrase(other.recoveryKey, 'whatever passphrase')).rejects.toThrow(/not the household key/);
   });
 });
+
+describe('Face ID (passkey) unlock', () => {
+  beforeEach(() => eraseVault());
+  it('unlocks with the passkey secret, and not with a wrong one', async () => {
+    const { unlockWithPasskey } = await import('./vault');
+    const { session } = await createVault('passphrase for face id');
+    await session.save({ ...session.ledger, title: 'Face ID test' });
+    const secret = crypto.getRandomValues(new Uint8Array(32));
+    await expect(session.enablePasskey('wrong passphrase', async () => ({ credentialId: 'x', salt: 's', secret }))).rejects.toThrow();
+    await session.enablePasskey('passphrase for face id', async () => ({ credentialId: 'cred1', salt: 'salt1', secret }));
+    expect(session.hasPasskey).toBe(true);
+
+    const s2 = await unlockWithPasskey(async (id, salt) => {
+      expect([id, salt]).toEqual(['cred1', 'salt1']);
+      return secret;
+    });
+    expect(s2.ledger.title).toBe('Face ID test');
+    await expect(unlockWithPasskey(async () => crypto.getRandomValues(new Uint8Array(32)))).rejects.toThrow(/passphrase/);
+
+    // Saving the ledger keeps Face ID set up; turning it off removes it.
+    await s2.save({ ...s2.ledger, title: 'Saved again' });
+    expect((await unlockWithPasskey(async () => secret)).ledger.title).toBe('Saved again');
+    await s2.disablePasskey();
+    await expect(unlockWithPasskey(async () => secret)).rejects.toThrow(/isn’t set up/);
+  });
+});

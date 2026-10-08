@@ -80,12 +80,12 @@ export function readFileText(accept: string): Promise<string | null> {
 }
 
 export function cards(ledger: Ledger) {
-  return ledger.accounts.filter((a) => isCard(a.name) && !a.closed);
+  return ledger.accounts.filter((a) => isCard(a.name) && !a.closed && !a.deleted);
 }
 
 export function categories(ledger: Ledger) {
   return ledger.accounts
-    .filter((a) => isCategory(a.name) && !a.closed)
+    .filter((a) => isCategory(a.name) && !a.closed && !a.deleted)
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

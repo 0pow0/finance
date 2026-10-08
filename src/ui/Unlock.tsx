@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { checkPassphrase, eraseVault, resetPassphrase, unlockVault, type Session } from '../lib/vault';
+import { useEffect, useState } from 'react';
+import { passkeySecret } from '../lib/passkey';
+import { checkPassphrase, eraseVault, loadVault, resetPassphrase, unlockVault, unlockWithPasskey, type Session } from '../lib/vault';
 import { useConfirm } from './confirm';
 
 export function Unlock({ onReady, onErased }: { onReady: (s: Session) => void; onErased: () => void }) {
@@ -9,6 +10,10 @@ export function Unlock({ onReady, onErased }: { onReady: (s: Session) => void; o
   const [recovery, setRecovery] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [hasFaceId, setHasFaceId] = useState(false);
+  useEffect(() => {
+    loadVault().then((v) => setHasFaceId(!!v?.passkey)).catch(() => {});
+  }, []);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -16,7 +21,8 @@ export function Unlock({ onReady, onErased }: { onReady: (s: Session) => void; o
     try {
       await fn();
     } catch (e) {
-      setError((e as Error).message);
+      const err = e as Error;
+      setError(err.name === 'NotAllowedError' ? 'Face ID was cancelled. Try again, or use your passphrase.' : err.message);
     } finally {
       setBusy(false);
     }
@@ -63,14 +69,20 @@ export function Unlock({ onReady, onErased }: { onReady: (s: Session) => void; o
     <div className="center-screen">
       <img className="logo" src="./icon-192.png" alt="" />
       <h1>Household Ledger</h1>
+      {hasFaceId && (
+        <button className="btn primary block" disabled={busy}
+          onClick={() => run(async () => onReady(await unlockWithPasskey(passkeySecret)))}>
+          Unlock with Face ID
+        </button>
+      )}
       <form className="stack" onSubmit={(e) => { e.preventDefault(); run(async () => onReady(await unlockVault(pass))); }}>
         <label className="field">
           <span>Passphrase</span>
-          <input className="input" type="password" autoComplete="current-password" autoFocus value={pass}
+          <input className="input" type="password" autoComplete="current-password" autoFocus={!hasFaceId} value={pass}
             onChange={(e) => setPass(e.target.value)} />
         </label>
         {error && <p className="error">{error}</p>}
-        <button className="btn primary block" disabled={!pass || busy}>{busy ? 'Unlocking…' : 'Unlock'}</button>
+        <button className={`btn block ${hasFaceId ? '' : 'primary'}`} disabled={!pass || busy}>{busy ? 'Unlocking…' : 'Unlock with passphrase'}</button>
       </form>
       <button className="btn link" onClick={() => { setMode('forgot'); setPass(''); setError(''); }}>Forgot passphrase?</button>
     </div>

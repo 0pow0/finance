@@ -9,7 +9,10 @@ import {
   importHouseholdKey,
   keyId,
   unwrapWithPassphrase,
+  unwrapWithSecret,
   wrapWithPassphrase,
+  wrapWithSecret,
+  type SecretWrappedKey,
   type EncryptedBlob,
   type WrappedKey,
 } from './crypto';
@@ -25,6 +28,8 @@ export interface VaultRecord {
   lastBackupAt?: string;
   /** This phone's own settings (e.g. its GitHub token), encrypted with the household key. Never synced. */
   device?: EncryptedBlob;
+  /** Face ID unlock: the household key wrapped with a secret only this phone's passkey can produce. */
+  passkey?: { credentialId: string; salt: string; wrapped: SecretWrappedKey; createdAt: string };
 }
 
 export interface DeviceSettings {
@@ -166,6 +171,30 @@ export class Session {
     await storeVault(this.record);
   }
 
+  get hasPasskey(): boolean {
+    return !!this.record.passkey;
+  }
+
+  /** Turn on Face ID unlock for this phone. `getSecret` creates the passkey (asking for Face ID). */
+  async enablePasskey(
+    passphrase: string,
+    create: () => Promise<{ credentialId: string; salt: string; secret: Uint8Array<ArrayBuffer> }>,
+  ): Promise<void> {
+    const raw = await unwrapWithPassphrase(this.record.wrapped, passphrase);
+    const { credentialId, salt, secret } = await create();
+    const wrapped = await wrapWithSecret(raw, secret);
+    const latest = (await loadVault()) ?? this.record;
+    this.record = { ...latest, passkey: { credentialId, salt, wrapped, createdAt: new Date().toISOString() } };
+    await storeVault(this.record);
+  }
+
+  async disablePasskey(): Promise<void> {
+    const latest = (await loadVault()) ?? this.record;
+    const { passkey: _removed, ...rest } = latest;
+    this.record = rest as VaultRecord;
+    await storeVault(this.record);
+  }
+
   async revealRecoveryKey(passphrase: string): Promise<string> {
     return encodeRecoveryKey(await unwrapWithPassphrase(this.record.wrapped, passphrase));
   }
@@ -243,4 +272,14 @@ export async function resetPassphrase(recoveryKey: string, newPassphrase: string
   const updated: VaultRecord = { ...record, wrapped: await wrapWithPassphrase(raw, newPassphrase) };
   await storeVault(updated);
   return Session.open(raw, updated);
+}
+
+/** Unlock with Face ID. `getSecret` uses the passkey (asking for Face ID). */
+export async function unlockWithPasskey(
+  getSecret: (credentialId: string, salt: string) => Promise<Uint8Array<ArrayBuffer>>,
+): Promise<Session> {
+  const record = await loadVault();
+  if (!record?.passkey) throw new Error('Face ID isn’t set up on this phone.');
+  const secret = await getSecret(record.passkey.credentialId, record.passkey.salt);
+  return Session.open(await unwrapWithSecret(record.passkey.wrapped, secret), record);
 }

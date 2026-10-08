@@ -40,6 +40,7 @@ export function toBeancount(ledger: Ledger): string {
   const accounts = [...ledger.accounts].sort((a, b) => a.name.localeCompare(b.name));
   for (const a of accounts) {
     const used = firstUse.get(a.name);
+    if (a.deleted && !used) continue;
     const open = used && used < a.open ? used : a.open;
     out.push(`${open} open ${a.name} ${ledger.currency}`);
     out.push(`  label: ${quote(a.label)}`);

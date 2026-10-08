@@ -192,3 +192,33 @@ export async function decryptJSON(key: CryptoKey, blob: EncryptedBlob): Promise<
   }
   return JSON.parse(dec.decode(await gunzip(plain)));
 }
+
+// ---- Wrapping with a high-entropy secret (e.g. from a passkey) ----
+
+export interface SecretWrappedKey {
+  iv: string;
+  ct: string;
+}
+
+const PASSKEY_INFO = enc.encode('household-ledger/passkey/v1');
+
+async function secretKek(secret: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
+  const ikm = await subtle.importKey('raw', secret, 'HKDF', false, ['deriveKey']);
+  return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: PASSKEY_INFO }, ikm,
+    { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+export async function wrapWithSecret(raw: Uint8Array<ArrayBuffer>, secret: Uint8Array<ArrayBuffer>): Promise<SecretWrappedKey> {
+  const iv = randomBytes(12);
+  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv, additionalData: PASSKEY_INFO }, await secretKek(secret), raw));
+  return { iv: toB64(iv), ct: toB64(ct) };
+}
+
+export async function unwrapWithSecret(w: SecretWrappedKey, secret: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  try {
+    const pt = await subtle.decrypt({ name: 'AES-GCM', iv: fromB64(w.iv), additionalData: PASSKEY_INFO }, await secretKek(secret), fromB64(w.ct));
+    return new Uint8Array(pt);
+  } catch {
+    throw new Error('Face ID unlock didn’t work. Use your passphrase, then turn Face ID off and on again in Settings.');
+  }
+}

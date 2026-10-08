@@ -179,8 +179,9 @@ button.row:active { background: var(--surface-2); }
 }
 .tabbar button.on { color: var(--accent); }
 .tabbar svg { width: 24px; height: 24px; }
+.tabbar .add-slot { flex: 1; display: flex; justify-content: center; }
 .tabbar .add {
-  flex: 0 0 auto; width: 56px; height: 56px; min-height: 56px; border-radius: 50%; margin: -20px 12px 0;
+  flex: 0 0 auto; width: 56px; height: 56px; min-height: 56px; border-radius: 50%; margin: -20px 0 0;
   background: var(--accent); color: var(--accent-text); box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
 }
 .tabbar .add svg { width: 28px; height: 28px; }

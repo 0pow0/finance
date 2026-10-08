@@ -11,6 +11,8 @@ export interface Account {
   closed?: boolean;
   /** For cards: whose card it is (a name from `people`, or SHARED). */
   owner?: string;
+  /** Removed by the user. Kept as a marker so the removal syncs to the other phone. */
+  deleted?: boolean;
   /** When this record last changed (ISO time). Used to merge edits from both phones. */
   updatedAt?: string;
 }
@@ -356,5 +358,29 @@ export function startOver(ledger: Ledger): Ledger {
     tombstones: {},
     accounts: ledger.accounts.map((a) => ({ ...a, updatedAt: at })),
     budgets: ledger.budgets.map((b) => ({ ...b, updatedAt: at })),
+  };
+}
+
+/** Whether an account is in use: by a transaction, a budget, or a current bank-feed mapping. */
+export function isAccountUsed(ledger: Ledger, name: string): boolean {
+  if (ledger.transactions.some((t) => t.postings.some((p) => p.account === name))) return true;
+  if (ledger.budgets.some((b) => b.account === name && b.amount > 0)) return true;
+  const current = ledger.lastImportAccounts;
+  return Object.entries(ledger.importAccounts ?? {}).some(
+    ([id, a]) => a.account === name && (!current || current.includes(id)),
+  );
+}
+
+/** Remove unused accounts (on all phones). Stale bank-feed mappings to them are cleared. */
+export function deleteAccounts(ledger: Ledger, names: string[]): Ledger {
+  const doomed = new Set(names.filter((n) => !isAccountUsed(ledger, n)));
+  if (!doomed.size) return ledger;
+  const at = nowISO();
+  const importAccounts = Object.fromEntries(Object.entries(ledger.importAccounts ?? {}).map(([id, a]) =>
+    [id, a.account && doomed.has(a.account) ? { ...a, account: null, updatedAt: at } : a]));
+  return {
+    ...ledger,
+    accounts: ledger.accounts.map((a) => (doomed.has(a.name) ? { ...a, deleted: true, closed: true, updatedAt: at } : a)),
+    ...(ledger.importAccounts ? { importAccounts } : {}),
   };
 }

@@ -144,7 +144,7 @@ export function App() {
           )}
           <Home ledger={ledger} month={month} setMonth={setMonth} onChange={commit} reviewCount={reviewCount}
             onReview={() => { setReviewOnly(true); setTab('activity'); }}
-            person={person} setPerson={setPerson} onOpenSettings={() => setTab('settings')} />
+            person={person} setPerson={setPerson} onOpenSettings={() => setTab('settings')} onOpenTxn={setEditing} />
         </>
       )}
       {tab === 'activity' && (
@@ -181,9 +181,10 @@ export function App() {
           <button className={tab === 'activity' ? 'on' : ''} onClick={() => { setReviewOnly(false); setTab('activity'); }}>
             <Icon name="list" />Activity
           </button>
-          <button className="add" aria-label="Add spending" onClick={() => setEditing('new')}><Icon name="plus" /></button>
+          <div className="add-slot">
+            <button className="add" aria-label="Add spending" onClick={() => setEditing('new')}><Icon name="plus" /></button>
+          </div>
           <button className={tab === 'settings' ? 'on' : ''} onClick={() => setTab('settings')}><Icon name="gear" />Settings</button>
-          <button onClick={lock}><Icon name="lock" />Lock</button>
         </div>
       </nav>
     </div>

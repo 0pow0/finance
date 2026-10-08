@@ -89,3 +89,19 @@ describe('start over', () => {
     expect(mergeLedgers(b, after).transactions.map((t) => t.payee)).toEqual(['New after start over']);
   });
 });
+
+describe('removing cards', () => {
+  it('removes only unused cards and the removal syncs', async () => {
+    const { deleteAccounts, isAccountUsed } = await import('./ledger');
+    tick();
+    const base = add(newLedger('2026-10-01'), 'Costco').ledger; // uses Chase
+    expect(isAccountUsed(base, 'Liabilities:CreditCard:Chase')).toBe(true);
+    expect(isAccountUsed(base, 'Liabilities:CreditCard:Amex')).toBe(false);
+    tick();
+    const a = deleteAccounts(base, ['Liabilities:CreditCard:Chase', 'Liabilities:CreditCard:Amex']);
+    expect(a.accounts.find((x) => x.name === 'Liabilities:CreditCard:Chase')!.deleted).toBeUndefined();
+    expect(a.accounts.find((x) => x.name === 'Liabilities:CreditCard:Amex')!.deleted).toBe(true);
+    const m = mergeLedgers(base, a);
+    expect(m.accounts.find((x) => x.name === 'Liabilities:CreditCard:Amex')!.deleted).toBe(true);
+  });
+});

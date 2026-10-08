@@ -19,7 +19,7 @@ const DATA = process.env.DATA_DIR || '.';
 const PUBLIC_KEY = join(DATA, 'config/import-public-key.json');
 const ACCESS = join(DATA, 'config/simplefin-access.enc.json');
 const LOOKBACK_DAYS = Number(process.env.LOOKBACK_DAYS || 10);
-const FIRST_RUN_DAYS = Number(process.env.FIRST_RUN_DAYS || 45);
+const FIRST_RUN_DAYS = Number(process.env.FIRST_RUN_DAYS || 30);
 const ALLOW_HTTP = process.env.ALLOW_INSECURE_HTTP === '1'; // tests only
 
 function stop(message, code = 1) {

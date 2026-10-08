@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyImport, cleanPayee, guessCategory, type ImportPayload } from './importer';
+import { applyImport, cleanPayee, guessCategory, removeUnreviewedImports, type ImportPayload } from './importer';
 import { deleteTransaction, newLedger, simpleTxn, upsertTransaction } from './ledger';
 
 const unix = (d: string) => Date.parse(`${d}T18:00:00Z`) / 1000;
@@ -75,5 +75,31 @@ describe('applyImport', () => {
     expect(ledger.importAccounts!['ACT-c1'].account).toBe('Liabilities:CreditCard:Venture-X');
     expect(ledger.accounts.some((a) => a.name === 'Liabilities:CreditCard:Venture-X' && a.label === 'Venture X')).toBe(true);
     expect(ledger.transactions[0].postings[0].account).toBe('Expenses:Transport:Rideshare');
+  });
+});
+
+describe('non-card accounts', () => {
+  it('skips checking/savings by default and can remove unreviewed imports', () => {
+    const accounts = [
+      { id: 'card', name: 'Freedom Unlimited', org: 'Chase', currency: 'USD' },
+      { id: 'chk', name: 'TOTAL CHECKING (5678)', org: 'Chase', currency: 'USD' },
+      { id: 'sav', name: 'Chase Savings', org: 'Chase', currency: 'USD' },
+    ];
+    const txns = [
+      { id: '1', account: 'card', posted: unix('2026-10-02'), amount: '-20.00', description: 'CHIPOTLE 123' },
+      { id: '2', account: 'chk', posted: unix('2026-10-02'), amount: '2500.00', description: 'PAYROLL' },
+      { id: '3', account: 'sav', posted: unix('2026-10-02'), amount: '1.02', description: 'INTEREST' },
+    ];
+    const { ledger, added } = applyImport(newLedger('2026-10-01'), payload(txns, accounts));
+    expect(added).toBe(1);
+    expect(ledger.importAccounts!.chk.account).toBeNull();
+    expect(ledger.importAccounts!.sav.account).toBeNull();
+    expect(ledger.importAccounts!.card.account).toBe('Liabilities:CreditCard:Chase');
+
+    const res = removeUnreviewedImports(ledger, 'card');
+    expect(res.removed).toBe(1);
+    expect(res.ledger.transactions).toHaveLength(0);
+    // Removed imports don't come back on the next import.
+    expect(applyImport(res.ledger, payload(txns, accounts)).added).toBe(0);
   });
 });

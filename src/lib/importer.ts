@@ -84,6 +84,13 @@ export function guessCategory(ledger: Ledger, payee: string, raw: string): strin
   return 'Expenses:Misc';
 }
 
+/** Checking, savings and investment accounts: not credit cards, so skipped unless you turn them on. */
+const NOT_A_CARD_RE = /checking|chk\b|ckg\b|savings|\bsav\b|money market|\bmma\b|brokerage|invest|retire|\bira\b|401|\bhsa\b|\bcd\b|certificate|deposit|mortgage|auto loan|student loan/i;
+
+export function looksLikeBankAccount(acct: { name: string; org: string }): boolean {
+  return NOT_A_CARD_RE.test(acct.name);
+}
+
 /** Pick which ledger card a newly seen bank account should import into. */
 function autoMap(ledger: Ledger, mapped: Set<string>, acct: { name: string; org: string }): { account: string; create?: string } {
   const text = `${acct.org} ${acct.name}`.toLowerCase();
@@ -111,7 +118,7 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
   const mapped = new Set(Object.values(importAccounts).map((a) => a.account).filter((a): a is string => !!a));
   for (const a of payload.accounts) {
     if (importAccounts[a.id]) continue;
-    if (a.currency && a.currency !== 'USD') {
+    if ((a.currency && a.currency !== 'USD') || looksLikeBankAccount(a)) {
       importAccounts[a.id] = { name: a.name, org: a.org, account: null, updatedAt: now };
       continue;
     }
@@ -173,4 +180,29 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
     ledger: { ...ledger, accounts, importAccounts, transactions: [...ledger.transactions, ...added], lastImportAt },
     added: added.length,
   };
+}
+
+/** Remove imported transactions from one bank-feed account that haven't been reviewed yet. */
+export function removeUnreviewedImports(ledger: Ledger, importAccountId: string): { ledger: Ledger; removed: number } {
+  const prefix = `simplefin:${importAccountId}:`;
+  const doomed = ledger.transactions.filter((t) => t.flag === '!' && t.externalId?.startsWith(prefix));
+  const at = nowISO();
+  const tombstones = { ...ledger.tombstones };
+  for (const t of doomed) tombstones[t.id] = { at, externalId: t.externalId };
+  const ids = new Set(doomed.map((t) => t.id));
+  return {
+    ledger: { ...ledger, transactions: ledger.transactions.filter((t) => !ids.has(t.id)), tombstones },
+    removed: doomed.length,
+  };
+}
+
+export function importedCount(ledger: Ledger, importAccountId: string): { total: number; unreviewed: number } {
+  const prefix = `simplefin:${importAccountId}:`;
+  let total = 0, unreviewed = 0;
+  for (const t of ledger.transactions) {
+    if (!t.externalId?.startsWith(prefix)) continue;
+    total++;
+    if (t.flag === '!') unreviewed++;
+  }
+  return { total, unreviewed };
 }

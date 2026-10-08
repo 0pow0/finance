@@ -9,6 +9,7 @@ import { checkPassphrase, eraseVault, type Session } from '../lib/vault';
 import { Sheet, categoryGroup, readFileText, saveFile } from './common';
 import { useConfirm } from './confirm';
 import { describeStatus, timeAgo, type SyncControls } from './useSync';
+import { importedCount, removeUnreviewedImports } from '../lib/importer';
 
 type Dialog =
   | { kind: 'account'; type: 'card' | 'category'; account?: Account }
@@ -422,14 +423,35 @@ function BankAccountSheet({ ledger, id, onSave, onClose }: {
   onSave: (l: Ledger) => void;
   onClose: () => void;
 }) {
+  const ask = useConfirm();
   const acct = ledger.importAccounts?.[id];
   const [target, setTarget] = useState(acct?.account ?? '');
   if (!acct) return null;
   const options = ledger.accounts.filter((a) => (isCard(a.name) || a.name.startsWith('Assets:')) && !a.closed);
+  const counts = importedCount(ledger, id);
+
+  async function save() {
+    let next: Ledger = {
+      ...ledger,
+      importAccounts: { ...ledger.importAccounts, [id]: { ...acct!, account: target || null, updatedAt: new Date().toISOString() } },
+    };
+    if (!target && counts.unreviewed > 0 && await ask({
+      title: 'Remove its imported transactions?',
+      message: `${counts.unreviewed} transaction${counts.unreviewed === 1 ? '' : 's'} from this account are waiting for review. Remove them too? Ones you already approved stay.`,
+      confirmLabel: `Remove ${counts.unreviewed}`, danger: true,
+    })) {
+      next = removeUnreviewedImports(next, id).ledger;
+    }
+    onSave(next);
+  }
+
   return (
     <Sheet title="Bank account" onClose={onClose}>
       <div className="stack">
         <p><strong>{acct.name}</strong> <span className="muted">· {acct.org}</span></p>
+        <p className="small muted">
+          {counts.total ? `${counts.total} imported${counts.unreviewed ? `, ${counts.unreviewed} waiting for review` : ''}.` : 'Nothing imported from this account yet.'}
+        </p>
         <label className="field">
           <span>Import its transactions into</span>
           <select className="input" value={target} onChange={(e) => setTarget(e.target.value)}>
@@ -437,14 +459,11 @@ function BankAccountSheet({ ledger, id, onSave, onClose }: {
             {options.map((a) => <option key={a.name} value={a.name}>{a.label}</option>)}
           </select>
         </label>
-        <p className="tiny muted">Applies to future imports. Transactions already imported stay where they are.</p>
-        <button className="btn primary block" onClick={() => onSave({
-          ...ledger,
-          importAccounts: {
-            ...ledger.importAccounts,
-            [id]: { ...acct, account: target || null, updatedAt: new Date().toISOString() },
-          },
-        })}>Save</button>
+        <p className="tiny muted">
+          Checking and savings accounts are off by default, so paychecks and transfers don’t count as spending.
+          Turning an account on picks up its transactions from the next daily import (the last 10 days).
+        </p>
+        <button className="btn primary block" onClick={save}>Save</button>
       </div>
     </Sheet>
   );

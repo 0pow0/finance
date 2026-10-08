@@ -78,8 +78,8 @@ describe('Face ID (passkey) unlock', () => {
     const { session } = await createVault('passphrase for face id');
     await session.save({ ...session.ledger, title: 'Face ID test' });
     const secret = crypto.getRandomValues(new Uint8Array(32));
-    await expect(session.enablePasskey('wrong passphrase', async () => ({ credentialId: 'x', salt: 's', secret }))).rejects.toThrow();
-    await session.enablePasskey('passphrase for face id', async () => ({ credentialId: 'cred1', salt: 'salt1', secret }));
+    await expect(session.enablePasskey('wrong passphrase', { credentialId: 'x', salt: 's', secret })).rejects.toThrow();
+    await session.enablePasskey('passphrase for face id', { credentialId: 'cred1', salt: 'salt1', secret });
     expect(session.hasPasskey).toBe(true);
 
     const s2 = await unlockWithPasskey(async (id, salt) => {

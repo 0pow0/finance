@@ -8,7 +8,7 @@ import {
 import { checkPassphrase, eraseVault, type Session } from '../lib/vault';
 import { Sheet, categoryGroup, readFileText, saveFile } from './common';
 import { useConfirm } from './confirm';
-import { createPasskey } from '../lib/passkey';
+import { createPasskey, describePasskeyError, passkeySecret } from '../lib/passkey';
 import { describeStatus, timeAgo, type SyncControls } from './useSync';
 import { importedCount, removeUnreviewedImports } from '../lib/importer';
 
@@ -612,30 +612,57 @@ function FaceIdSheet({ session, onClose, onDone }: { session: Session; onClose: 
   const [pass, setPass] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // iPhones need two Face ID taps: one to create the passkey, one to use it.
+  const [created, setCreated] = useState<{ credentialId: string; salt: string } | null>(null);
+
+  async function step(fn: () => Promise<void>) {
+    setBusy(true);
+    setError('');
+    try {
+      await fn();
+    } catch (e) {
+      setError(describePasskeyError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Sheet title="Face ID" onClose={onClose}>
       <div className="stack">
-        <p className="small">
-          Unlock this phone’s ledger with Face ID instead of typing your passphrase. Your passphrase still works as a
-          backup. This creates a passkey for Household Ledger on this phone.
-        </p>
-        <label className="field"><span>Enter your passphrase to turn it on</span>
-          <input className="input" type="password" autoComplete="current-password" value={pass} onChange={(e) => setPass(e.target.value)} />
-        </label>
-        {error && <p className="error">{error}</p>}
-        <button className="btn primary block" disabled={busy || !pass} onClick={async () => {
-          setBusy(true);
-          setError('');
-          try {
-            await session.enablePasskey(pass, () => createPasskey('Household Ledger'));
-            onDone();
-          } catch (e) {
-            const err = e as Error;
-            setError(err.name === 'NotAllowedError' ? 'Face ID was cancelled. Try again when you’re ready.' : err.message);
-          } finally {
-            setBusy(false);
-          }
-        }}>{busy ? 'Waiting for Face ID…' : 'Turn on Face ID'}</button>
+        {!created ? (
+          <>
+            <p className="small">
+              Unlock this phone’s ledger with Face ID instead of typing your passphrase. Your passphrase still works as
+              a backup. This saves a passkey for Household Ledger in Apple Passwords on this phone.
+            </p>
+            <label className="field"><span>Step 1 of 2: enter your passphrase</span>
+              <input className="input" type="password" autoComplete="current-password" value={pass} onChange={(e) => setPass(e.target.value)} />
+            </label>
+            {error && <p className="error">{error}</p>}
+            <button className="btn primary block" disabled={busy || !pass} onClick={() => step(async () => {
+              await session.verifyPassphrase(pass);
+              const p = await createPasskey('Household Ledger');
+              if (p.secret) {
+                await session.enablePasskey(pass, { ...p, secret: p.secret });
+                onDone();
+              } else {
+                setCreated({ credentialId: p.credentialId, salt: p.salt });
+              }
+            })}>{busy ? 'Waiting for Face ID…' : 'Create passkey'}</button>
+            <p className="tiny muted">If iPhone asks where to save the passkey, choose Passwords (iCloud Keychain).</p>
+          </>
+        ) : (
+          <>
+            <p className="small">Passkey saved. Step 2 of 2: confirm with Face ID once to finish.</p>
+            {error && <p className="error">{error}</p>}
+            <button className="btn primary block" disabled={busy} onClick={() => step(async () => {
+              const secret = await passkeySecret(created.credentialId, created.salt);
+              await session.enablePasskey(pass, { ...created, secret });
+              onDone();
+            })}>{busy ? 'Waiting for Face ID…' : 'Confirm with Face ID'}</button>
+          </>
+        )}
       </div>
     </Sheet>
   );

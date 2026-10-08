@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { passkeySecret } from '../lib/passkey';
+import { describePasskeyError, passkeySecret } from '../lib/passkey';
 import { checkPassphrase, eraseVault, loadVault, resetPassphrase, unlockVault, unlockWithPasskey, type Session } from '../lib/vault';
 import { useConfirm } from './confirm';
 
@@ -21,8 +21,7 @@ export function Unlock({ onReady, onErased }: { onReady: (s: Session) => void; o
     try {
       await fn();
     } catch (e) {
-      const err = e as Error;
-      setError(err.name === 'NotAllowedError' ? 'Face ID was cancelled. Try again, or use your passphrase.' : err.message);
+      setError(describePasskeyError(e));
     } finally {
       setBusy(false);
     }

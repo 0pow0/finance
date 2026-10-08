@@ -175,13 +175,18 @@ export class Session {
     return !!this.record.passkey;
   }
 
-  /** Turn on Face ID unlock for this phone. `getSecret` creates the passkey (asking for Face ID). */
+  /** Throws WrongPassphraseError if the passphrase is wrong. */
+  async verifyPassphrase(passphrase: string): Promise<void> {
+    await unwrapWithPassphrase(this.record.wrapped, passphrase);
+  }
+
+  /** Turn on Face ID unlock for this phone, given the passkey and the secret it produced. */
   async enablePasskey(
     passphrase: string,
-    create: () => Promise<{ credentialId: string; salt: string; secret: Uint8Array<ArrayBuffer> }>,
+    passkey: { credentialId: string; salt: string; secret: Uint8Array<ArrayBuffer> },
   ): Promise<void> {
     const raw = await unwrapWithPassphrase(this.record.wrapped, passphrase);
-    const { credentialId, salt, secret } = await create();
+    const { credentialId, salt, secret } = passkey;
     const wrapped = await wrapWithSecret(raw, secret);
     const latest = (await loadVault()) ?? this.record;
     this.record = { ...latest, passkey: { credentialId, salt, wrapped, createdAt: new Date().toISOString() } };

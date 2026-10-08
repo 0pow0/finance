@@ -7,9 +7,22 @@ import { fromB64, toB64 } from './crypto';
 const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
 
 export class PasskeyUnsupportedError extends Error {
-  constructor() {
-    super('This phone or browser can’t use Face ID for this app. It needs iOS 18 or newer, opened from the Home Screen icon.');
+  constructor(detail = '') {
+    super(
+      'This phone can’t use Face ID for this app yet. It needs iOS 18 or newer, the app opened from the Home Screen ' +
+      'icon, and the passkey saved to Apple Passwords (iCloud Keychain), not another password manager.' +
+      (detail ? ` (${detail})` : ''),
+    );
   }
+}
+
+/** A readable message for errors from the Face ID / passkey prompts. */
+export function describePasskeyError(e: unknown): string {
+  const err = e as Error;
+  if (err?.name === 'NotAllowedError') return 'Face ID was cancelled or timed out. Tap the button to try again.';
+  if (err?.name === 'InvalidStateError') return 'A passkey for this app already exists on this phone. Try again.';
+  if (err?.name === 'SecurityError') return 'Face ID only works on the app’s real address (0pow0.github.io).';
+  return err?.message ?? String(e);
 }
 
 export function passkeysAvailable(): boolean {
@@ -24,8 +37,11 @@ function bytes(x: ArrayBuffer | Uint8Array): Uint8Array<ArrayBuffer> {
   return new Uint8Array(x instanceof Uint8Array ? x.slice().buffer : x);
 }
 
-/** Create a passkey on this phone (asks for Face ID). Returns its id, the salt, and the secret. */
-export async function createPasskey(displayName: string): Promise<{ credentialId: string; salt: string; secret: Uint8Array<ArrayBuffer> }> {
+/**
+ * Create a passkey on this phone (asks for Face ID). Returns its id and salt, plus the secret if the
+ * platform gives it at creation. iPhones usually don't: then call passkeySecret() from a second tap.
+ */
+export async function createPasskey(displayName: string): Promise<{ credentialId: string; salt: string; secret?: Uint8Array<ArrayBuffer> }> {
   if (!passkeysAvailable()) throw new PasskeyUnsupportedError();
   const salt = random(32);
   const cred = (await navigator.credentials.create({
@@ -39,13 +55,12 @@ export async function createPasskey(displayName: string): Promise<{ credentialId
       extensions: { prf: { eval: { first: salt } } } as AuthenticationExtensionsClientInputs,
     },
   })) as PublicKeyCredential | null;
-  if (!cred) throw new PasskeyUnsupportedError();
+  if (!cred) throw new PasskeyUnsupportedError('no passkey was created');
   const prf = prfOf(cred);
-  if (!prf?.enabled && !prf?.results?.first) throw new PasskeyUnsupportedError();
+  if (!prf) throw new PasskeyUnsupportedError('passkey has no PRF support');
+  if (prf.enabled === false && !prf.results?.first) throw new PasskeyUnsupportedError('PRF not enabled for this passkey');
   const credentialId = toB64(new Uint8Array(cred.rawId));
-  // Some platforms only return the secret when the passkey is used, not when it's created.
-  const secret = prf.results?.first ? bytes(prf.results.first) : await passkeySecret(credentialId, toB64(salt));
-  return { credentialId, salt: toB64(salt), secret };
+  return { credentialId, salt: toB64(salt), secret: prf.results?.first ? bytes(prf.results.first) : undefined };
 }
 
 /** Use the passkey (asks for Face ID) and return its secret. */
@@ -61,6 +76,6 @@ export async function passkeySecret(credentialId: string, salt: string): Promise
     },
   })) as PublicKeyCredential | null;
   const first = cred && prfOf(cred)?.results?.first;
-  if (!first) throw new PasskeyUnsupportedError();
+  if (!first) throw new PasskeyUnsupportedError('passkey returned no secret');
   return bytes(first);
 }

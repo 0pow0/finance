@@ -68,12 +68,27 @@ export interface Ledger {
   lastImportAt?: string;
   /** Bank-feed account ids present in the most recent import (older ones were removed or re-linked). */
   lastImportAccounts?: string[];
+  /** Latest balance the bank reported for each card (ledger account name -> balance). */
+  bankBalances?: Record<string, BankBalance>;
   /** Household members, for per-person spending. */
   people?: string[];
   peopleUpdatedAt?: string;
 }
 
 export const SHARED = 'Shared';
+
+export interface BankBalance {
+  /** In ledger sign: negative = you owe on a card. */
+  amount: Cents;
+  /** The bank's balance is as of the end of this day. */
+  asOf: string;
+  /** Pending (not yet posted) charges, same sign. */
+  pending: Cents;
+  fetchedAt: string;
+}
+
+export const OPENING_ACCOUNT = 'Equity:Opening-Balances';
+export const ADJUSTMENT_ACCOUNT = 'Equity:Adjustments';
 
 export interface Tombstone {
   at: string;
@@ -356,6 +371,7 @@ export function startOver(ledger: Ledger): Ledger {
     resetAt: at,
     transactions: [],
     tombstones: {},
+    bankBalances: {},
     accounts: ledger.accounts.map((a) => ({ ...a, updatedAt: at })),
     budgets: ledger.budgets.map((b) => ({ ...b, updatedAt: at })),
   };

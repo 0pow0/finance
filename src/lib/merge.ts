@@ -84,6 +84,14 @@ export function mergeLedgers(a: Ledger, b: Ledger): Ledger {
   if (reset) merged.resetAt = reset;
   if (importKeys.length) merged.importKeys = importKeys;
   if (Object.keys(importAccounts).length) merged.importAccounts = importAccounts;
+  const bankBalances: NonNullable<Ledger['bankBalances']> = {};
+  for (const side of [a, b]) {
+    for (const [acct, bal] of Object.entries(side.bankBalances ?? {})) {
+      if (reset && ts(side.resetAt) < reset && bal.fetchedAt < reset) continue; // cleared by "Start over"
+      if (!bankBalances[acct] || bal.fetchedAt > bankBalances[acct].fetchedAt) bankBalances[acct] = bal;
+    }
+  }
+  if (Object.keys(bankBalances).length) merged.bankBalances = bankBalances;
   const peopleSide = ts(a.peopleUpdatedAt) >= ts(b.peopleUpdatedAt) ? a : b;
   if (peopleSide.people) {
     merged.people = peopleSide.people;

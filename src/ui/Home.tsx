@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { adjustToBank, cardBalances, type CardBalance } from '../lib/balances';
 import { budgetReport, categorySpending, entryFor, spendingByPerson, type BudgetRow } from '../lib/budget';
 import { addMonths, monthLabel, monthOf, todayISO } from '../lib/dates';
 import {
@@ -7,6 +8,7 @@ import {
 } from '../lib/ledger';
 import { centsToDecimal, formatUSD, parseCents } from '../lib/money';
 import { Icon, Sheet, categories } from './common';
+import { useConfirm } from './confirm';
 
 export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview, person, setPerson, onOpenSettings, onOpenTxn }: {
   ledger: Ledger;
@@ -21,6 +23,8 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
   onOpenTxn: (t: Transaction) => void;
 }) {
   const [viewing, setViewing] = useState<string | null>(null);
+  const [viewingCard, setViewingCard] = useState<string | null>(null);
+  const balances = useMemo(() => cardBalances(ledger), [ledger]);
   const report = useMemo(() => budgetReport(ledger, month), [ledger, month]);
   const byPerson = useMemo(() => spendingByPerson(ledger, month), [ledger, month]);
   const people = ledger.people ?? [];
@@ -77,6 +81,8 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
       <ByPerson ledger={ledger} byPerson={byPerson} views={views} total={report.totalSpent}
         onPick={setPerson} onOpenSettings={onOpenSettings} />
 
+      <CardsSection balances={balances} onPick={setViewingCard} />
+
       <div className="spread">
         <h3>Budgets</h3>
         <button className="btn link" onClick={() => setEditing({})}>+ Add budget</button>
@@ -106,6 +112,13 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
       )}
 
       </>)}
+
+      {viewingCard && balances.find((b) => b.account.name === viewingCard) && (
+        <CardBalanceSheet ledger={ledger} card={balances.find((b) => b.account.name === viewingCard)!}
+          onClose={() => setViewingCard(null)}
+          onOpenTxn={(t) => { setViewingCard(null); onOpenTxn(t); }}
+          onAdjust={(c) => { onChange(adjustToBank(ledger, c)); setViewingCard(null); }} />
+      )}
 
       {viewing && (
         <CategorySheet ledger={ledger} account={viewing} month={month} person={current}
@@ -363,6 +376,106 @@ function CategorySheet({ ledger, account, month, person, onClose, onOpenTxn, onE
         {!person && (
           <button className="btn block" onClick={onEditBudget}>{hasBudget ? 'Edit budget' : 'Set a monthly budget'}</button>
         )}
+      </div>
+    </Sheet>
+  );
+}
+
+function statusLine(c: CardBalance): { text: string; cls: string } {
+  if (!c.bank) return { text: 'No bank balance yet', cls: 'muted' };
+  if (c.bank.status === 'match') return { text: '✓ Matches bank', cls: 'good' };
+  if (c.bank.status === 'pending') return { text: `Matches once ${formatUSD(c.bank.pending)} pending posts`, cls: 'muted' };
+  return { text: `⚠ Off by ${formatUSD(Math.abs(c.bank.difference))}`, cls: 'bad' };
+}
+
+function CardsSection({ balances, onPick }: { balances: CardBalance[]; onPick: (account: string) => void }) {
+  if (!balances.length) return null;
+  const total = balances.reduce((s, c) => s + c.owed, 0);
+  return (
+    <>
+      <div className="spread">
+        <h3>Cards</h3>
+        <span className="small muted">You owe {formatUSD(total)}</span>
+      </div>
+      <div className="list">
+        {balances.map((c) => {
+          const st = statusLine(c);
+          return (
+            <button className="row" key={c.account.name} onClick={() => onPick(c.account.name)}>
+              <div className="grow">
+                <div className="title">{c.account.label}{c.account.owner ? <span className="tiny muted"> · {c.account.owner}</span> : null}</div>
+                <div className={`tiny ${st.cls}`}>{st.text}</div>
+              </div>
+              <span className="amt">{formatUSD(c.owed)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function CardBalanceSheet({ ledger, card, onClose, onOpenTxn, onAdjust }: {
+  ledger: Ledger;
+  card: CardBalance;
+  onClose: () => void;
+  onOpenTxn: (t: Transaction) => void;
+  onAdjust: (c: CardBalance) => void;
+}) {
+  const ask = useConfirm();
+  const recent = sortedTransactions(ledger).filter((t) => t.postings.some((p) => p.account === card.account.name)).slice(0, 15);
+  const b = card.bank;
+  const asOf = b ? new Date(`${b.asOf}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+  return (
+    <Sheet title={card.account.label} onClose={onClose}>
+      <div className="stack">
+        <div className="card stack">
+          <div className="spread"><span className="muted small">You owe (this app)</span><span className="amt"><strong>{formatUSD(card.owed)}</strong></span></div>
+          {b ? (
+            <>
+              <div className="spread"><span className="muted small">This app on {asOf}</span><span className="amt">{formatUSD(b.ledgerOwed)}</span></div>
+              <div className="spread"><span className="muted small">Bank says on {asOf}</span><span className="amt">{formatUSD(b.owed)}</span></div>
+              {b.pending !== 0 && <div className="spread"><span className="muted small">Pending at the bank</span><span className="amt">{formatUSD(b.pending)}</span></div>}
+              <div className="spread"><span className="small">Check</span><span className={`small ${statusLine(card).cls}`}>{statusLine(card).text}</span></div>
+            </>
+          ) : (
+            <p className="tiny muted">The bank’s balance arrives with the next daily import.</p>
+          )}
+        </div>
+        {b?.status === 'mismatch' && (
+          <>
+            <p className="small">
+              {b.difference > 0 ? 'The bank says you owe more than this app shows: a purchase may be missing, or a refund was entered twice.'
+                : 'This app shows more than the bank: a purchase may be duplicated, or a refund or payment is missing.'}
+              {' '}Check the list below first. If everything looks right, you can book the difference.
+            </p>
+            <button className="btn block" onClick={async () => {
+              if (await ask({
+                title: 'Match the bank balance?',
+                message: `This adds a ${formatUSD(Math.abs(b.difference))} “Balance adjustment” on ${asOf}, so this card matches the bank. It doesn’t count as spending.`,
+                confirmLabel: 'Add adjustment',
+              })) onAdjust(card);
+            }}>Match bank balance</button>
+          </>
+        )}
+        {b?.status === 'pending' && (
+          <p className="small muted">The bank includes charges that haven’t posted yet. They’ll be imported once they post, and the check will pass.</p>
+        )}
+        <h3>Recent on this card</h3>
+        <div className="list">
+          {recent.map((t) => {
+            const amt = -t.postings.filter((p) => p.account === card.account.name).reduce((s, p) => s + p.amount, 0);
+            return (
+              <button className="row" key={t.id} onClick={() => onOpenTxn(t)}>
+                <div className="grow">
+                  <div className="title">{t.payee || t.narration}</div>
+                  <div className="tiny muted">{new Date(`${t.date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
+                </div>
+                <span className={`amt ${amt < 0 ? 'good' : ''}`}>{amt < 0 ? `−${formatUSD(-amt)}` : formatUSD(amt)}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </Sheet>
   );

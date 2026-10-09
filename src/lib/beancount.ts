@@ -2,6 +2,8 @@
 // The writer produces files that pass `bean-check`. The reader understands the subset
 // this app writes, plus common hand-written forms (elided posting amounts, comments, tags).
 
+import { cardBalances } from './balances';
+import { addDays } from './dates';
 import { centsToDecimal, parseCents } from './money';
 import {
   LEDGER_VERSION,
@@ -66,6 +68,18 @@ export function toBeancount(ledger: Ledger): string {
     }
     out.push('');
   }
+
+  // Bank balance checks. Beancount checks a balance at the start of the given day, so use the day
+  // after the bank's "as of" date. Only checks that pass are asserted; others are noted as comments.
+  for (const c of cardBalances(ledger)) {
+    if (!c.bank) continue;
+    const amount = centsToDecimal(-c.bank.owed);
+    if (c.bank.status === 'match') {
+      out.push(`${addDays(c.bank.asOf, 1)} balance ${c.account.name}  ${amount} ${ledger.currency}`);
+    } else {
+      out.push(`; ${c.account.name}: bank reported ${amount} ${ledger.currency} on ${c.bank.asOf}, ledger differs by ${centsToDecimal(c.bank.difference)}`);
+    }
+  }
   return out.join('\n');
 }
 
@@ -87,6 +101,7 @@ const TXN_RE = new RegExp(String.raw`^(${DATE})\s+(\*|!|txn)\s*((?:${STR}\s*){0,
 const BUDGET_RE = new RegExp(
   String.raw`^(${DATE})\s+custom\s+"budget"\s+(\S+)\s+"monthly"\s+(-?[\d,]+(?:\.\d+)?)\s+([A-Z]+)\s*$`,
 );
+const BALANCE_RE = new RegExp(String.raw`^(${DATE})\s+balance\s+(\S+)\s+(-?[\d,]*\.?\d+)\s+([A-Z]+)\s*$`);
 const META_RE = new RegExp(String.raw`^\s+([a-z][A-Za-z0-9_-]*):\s*(.*?)\s*$`);
 const POSTING_RE = /^\s+(?:[*!]\s+)?([A-Z][A-Za-z0-9:-]+)(?:\s+(-?[\d,]*\.?\d+)\s+([A-Z]+))?\s*(?:;.*)?$/;
 const STR_G = new RegExp(STR, 'g');
@@ -200,6 +215,12 @@ export function fromBeancount(text: string): Ledger {
       const ext = meta.get('external_id');
       if (ext) t.externalId = ext;
       ledger.transactions.push(t);
+    } else if ((m = BALANCE_RE.exec(b.head))) {
+      const [, date, account, amount, cur] = m;
+      const cents = parseCents(amount);
+      if (cur === 'USD' && cents !== null) {
+        ledger.bankBalances = { ...ledger.bankBalances, [account]: { amount: cents, asOf: addDays(date, -1), pending: 0, fetchedAt: `${date}T00:00:00.000Z` } };
+      }
     } else if (/^\d{4}-\d{2}-\d{2}\s+(balance|note|document|event|price|pad|commodity|custom|query)\b/.test(b.head)) {
       // Valid Beancount, but not something this app tracks yet.
     } else if (/^(plugin|include|pushtag|poptag|pushmeta|popmeta)\b/.test(b.head)) {

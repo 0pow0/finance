@@ -70,7 +70,7 @@ async function fetchAccounts(access, days) {
   const auth = Buffer.from(`${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`).toString('base64');
   const base = `${url.protocol}//${url.host}${url.pathname.replace(/\/$/, '')}`;
   const start = Math.floor(Date.now() / 1000) - days * 86400;
-  const res = await fetch(`${base}/accounts?start-date=${start}`, { headers: { Authorization: `Basic ${auth}` } });
+  const res = await fetch(`${base}/accounts?start-date=${start}&pending=1`, { headers: { Authorization: `Basic ${auth}` } });
   if (res.status === 402) stop('SimpleFIN Bridge says payment is required. Check your SimpleFIN subscription.');
   if (res.status === 403) {
     stop('SimpleFIN access was revoked. Create a new setup token in SimpleFIN Bridge, update the SIMPLEFIN_SETUP_TOKEN secret, and delete config/simplefin-access.enc.json.');
@@ -96,7 +96,17 @@ async function main() {
   const accounts = [];
   const transactions = [];
   for (const a of data.accounts ?? []) {
-    accounts.push({ id: String(a.id), name: String(a.name ?? ''), org: String(a.org?.name ?? a.org?.domain ?? ''), currency: String(a.currency ?? 'USD') });
+    let pendingCents = 0;
+    for (const t of a.transactions ?? []) if (t.pending) pendingCents += Math.round(Number(t.amount) * 100) || 0;
+    accounts.push({
+      id: String(a.id),
+      name: String(a.name ?? ''),
+      org: String(a.org?.name ?? a.org?.domain ?? ''),
+      currency: String(a.currency ?? 'USD'),
+      // What the bank reports, for the balance check in the app.
+      ...(a.balance !== undefined ? { balance: String(a.balance), balanceDate: Number(a['balance-date'] ?? 0) || null } : {}),
+      pending: (pendingCents / 100).toFixed(2),
+    });
     for (const t of a.transactions ?? []) {
       if (t.pending) continue;
       transactions.push({
@@ -111,7 +121,7 @@ async function main() {
     }
   }
   console.log(`Fetched ${transactions.length} posted transactions from ${accounts.length} accounts.`);
-  if (!transactions.length) return;
+  if (!accounts.length) return; // still send balances on days without new transactions
 
   const fetchedAt = new Date().toISOString();
   const sealed = await sealImport(publicJwk, kid, { v: 1, fetchedAt, accounts, transactions });

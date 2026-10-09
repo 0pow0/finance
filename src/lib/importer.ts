@@ -1,9 +1,9 @@
 // Turns bank-feed data (from the daily SimpleFIN job) into ledger transactions awaiting review.
 
-import { todayISO } from './dates';
+import { addDays, todayISO } from './dates';
 import {
-  isCard, newId, nowISO, toAccountComponent,
-  type ImportAccount, type Ledger, type Transaction,
+  OPENING_ACCOUNT, isCard, newId, nowISO, toAccountComponent,
+  type BankBalance, type ImportAccount, type Ledger, type Transaction,
 } from './ledger';
 import { parseCents } from './money';
 
@@ -11,7 +11,13 @@ import { parseCents } from './money';
 export interface ImportPayload {
   v: 1;
   fetchedAt: string;
-  accounts: Array<{ id: string; name: string; org: string; currency: string }>;
+  accounts: Array<{
+    id: string; name: string; org: string; currency: string;
+    /** Bank-reported balance (negative = owed on a card), as of balanceDate (unix seconds). */
+    balance?: string; balanceDate?: number | null;
+    /** Sum of pending (not yet posted) transactions. */
+    pending?: string;
+  }>;
   transactions: Array<{
     id: string;
     account: string;
@@ -200,6 +206,51 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
     });
   }
 
+  // Bank balances, and a starting balance per card so the ledger can match the bank.
+  const bankBalances: Record<string, BankBalance> = { ...ledger.bankBalances };
+  const allTxns = [...ledger.transactions, ...added];
+  const taken = new Set([
+    ...allTxns.map((t) => t.externalId).filter(Boolean),
+    ...Object.values(ledger.tombstones ?? {}).map((x) => x.externalId).filter(Boolean),
+  ]);
+  for (const a of payload.accounts) {
+    const target = importAccounts[a.id]?.account;
+    const amount = a.balance !== undefined ? parseCents(a.balance) : null;
+    if (!target || !isCard(target) || amount === null) continue;
+    const asOf = localDate(a.balanceDate || Date.parse(payload.fetchedAt) / 1000);
+    const prev = bankBalances[target];
+    if (!prev || payload.fetchedAt >= prev.fetchedAt) {
+      bankBalances[target] = { amount, asOf, pending: parseCents(a.pending ?? '0') ?? 0, fetchedAt: payload.fetchedAt };
+    }
+    // The starting balance is set once: the first time the bank reports this card's balance.
+    const openingId = `opening:${target}`;
+    if (prev || taken.has(openingId)) continue;
+    taken.add(openingId);
+    const onCard = allTxns.filter((t) => t.postings.some((p) => p.account === target));
+    const sum = onCard.filter((t) => t.date <= asOf)
+      .reduce((s, t) => s + t.postings.filter((p) => p.account === target).reduce((x, p) => x + p.amount, 0), 0);
+    const diff = amount - sum;
+    if (diff === 0) continue;
+    const first = onCard.map((t) => t.date).sort()[0] ?? asOf;
+    const opening: Transaction = {
+      id: newId(),
+      date: addDays(first < asOf ? first : asOf, -1),
+      flag: '*',
+      payee: 'Starting balance',
+      narration: 'Balance owed before the first bank import',
+      postings: [
+        { account: target, amount: diff },
+        { account: OPENING_ACCOUNT, amount: -diff },
+      ],
+      tags: [],
+      source: 'import',
+      externalId: openingId,
+      updatedAt: now,
+    };
+    added.push(opening);
+    allTxns.push(opening);
+  }
+
   // Make sure every account used exists and opens on or before its first use.
   for (const t of added) {
     for (const p of t.postings) {
@@ -215,9 +266,10 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
   return {
     ledger: {
       ...ledger, accounts, importAccounts, transactions: [...ledger.transactions, ...added], lastImportAt,
+      ...(Object.keys(bankBalances).length ? { bankBalances } : {}),
       ...(lastImportAccounts ? { lastImportAccounts } : {}),
     },
-    added: added.length,
+    added: added.filter((t) => !t.externalId?.startsWith('opening:')).length,
   };
 }
 

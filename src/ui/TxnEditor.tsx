@@ -29,7 +29,8 @@ export function TxnEditor({ ledger, txn, onSave, onDelete, onClose }: {
   const cardList = cards(ledger);
   const catList = categories(ledger);
   const sides = txn ? txnSides(txn) : undefined;
-  const simple = !txn || txn.postings.length === 2;
+  // Purchases, refunds and card payments are editable here; starting balances and adjustments aren't.
+  const simple = !txn || (txn.postings.length === 2 && !!sides?.to && /^(Expenses|Assets):/.test(sides.to.account));
   const initialAmount = sides?.to?.amount ?? 0;
 
   const [amount, setAmount] = useState(txn ? centsToDecimal(Math.abs(initialAmount)) : '');
@@ -95,7 +96,11 @@ export function TxnEditor({ ledger, txn, onSave, onDelete, onClose }: {
     return (
       <Sheet title="Transaction" onClose={onClose}>
         <div className="stack">
-          <p className="muted small">This transaction has several parts (split). Splits can be viewed here and edited in the Beancount file.</p>
+          <p className="muted small">
+            {txn.postings.length > 2
+              ? 'This transaction has several parts (split). Splits can be viewed here and edited in the Beancount file.'
+              : `${txn.payee}${txn.narration ? `: ${txn.narration}` : ''}. This is a bookkeeping entry, not spending.`}
+          </p>
           <div className="list">
             {txn.postings.map((p, i) => (
               <div className="row" key={i}>

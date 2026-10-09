@@ -131,3 +131,27 @@ describe('re-linked bank accounts', () => {
     expect(ledger.importAccounts!.a1.account).not.toBe(ledger.importAccounts!.a2.account);
   });
 });
+
+describe('pending charges', () => {
+  it('shows pending as a snapshot, replaced once they post, never counted twice', async () => {
+    const { allPending } = await import('./importer');
+    const { budgetReport } = await import('./budget');
+    const acct = [{ id: 'c1', name: 'Freedom', org: 'Chase', currency: 'USD' }];
+    const pend = { id: 'p1', account: 'c1', posted: 0, transactedAt: unix('2026-10-08'), amount: '-18.75', description: 'SQ *BLUE BOTTLE', pending: true };
+    let { ledger, added } = applyImport(newLedger('2026-10-01'), { ...payload([pend], acct), fetchedAt: '2026-10-08T12:00:00Z' });
+    expect(added).toBe(0);
+    expect(allPending(ledger)).toMatchObject([{ payee: 'Blue Bottle', amount: 1875, card: 'Liabilities:CreditCard:Chase', date: '2026-10-08' }]);
+    expect(budgetReport(ledger, '2026-10').totalSpent).toBe(0); // not in the books
+
+    // Next import: it posted (new id, as banks do). Pending list empties, one real transaction.
+    const posted = { id: 't9', account: 'c1', posted: unix('2026-10-09'), amount: '-18.75', description: 'SQ *BLUE BOTTLE' };
+    ({ ledger, added } = applyImport(ledger, { ...payload([posted], acct), fetchedAt: '2026-10-09T12:00:00Z' }));
+    expect(added).toBe(1);
+    expect(allPending(ledger)).toEqual([]);
+    expect(budgetReport(ledger, '2026-10').totalSpent).toBe(1875);
+
+    // An older import arriving late doesn't bring stale pending back.
+    ({ ledger } = applyImport(ledger, { ...payload([pend], acct), fetchedAt: '2026-10-08T12:00:00Z' }));
+    expect(allPending(ledger)).toEqual([]);
+  });
+});

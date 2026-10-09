@@ -108,8 +108,9 @@ async function main() {
       pending: (pendingCents / 100).toFixed(2),
     });
     for (const t of a.transactions ?? []) {
-      if (t.pending) continue;
+      // Pending charges are sent too, flagged, so the app can show them; they're not booked until posted.
       transactions.push({
+        ...(t.pending ? { pending: true } : {}),
         id: String(t.id),
         account: String(a.id),
         posted: Number(t.posted),
@@ -120,7 +121,8 @@ async function main() {
       });
     }
   }
-  console.log(`Fetched ${transactions.length} posted transactions from ${accounts.length} accounts.`);
+  const pendingTotal = transactions.filter((t) => t.pending).length;
+  console.log(`Fetched ${transactions.length - pendingTotal} posted and ${pendingTotal} pending transactions from ${accounts.length} accounts.`);
 
   // How fresh each bank's data is (dates and counts only; no amounts or merchants).
   const day = (unix) => (unix ? new Date(unix * 1000).toISOString().slice(0, 10) : 'unknown');

@@ -3,6 +3,7 @@ import {
   SHARED, accountLabel, approveTransactions, isCard, ownerMap, sortedTransactions, txnAmount, txnOwner, txnSides,
   type Ledger, type Transaction,
 } from '../lib/ledger';
+import { allPending } from '../lib/importer';
 import { formatUSD } from '../lib/money';
 import { cards } from './common';
 
@@ -36,6 +37,16 @@ export function Activity({ ledger, onOpen, reviewOnly, setReviewOnly, onChange, 
     });
   }, [ledger, query, card, reviewOnly, who]);
 
+  const pending = useMemo(() => {
+    if (reviewOnly) return [];
+    const q = query.trim().toLowerCase();
+    const owners = ownerMap(ledger);
+    return allPending(ledger).filter((p) =>
+      (!card || p.card === card) &&
+      (!who || owners.get(p.card) === who) &&
+      (!q || p.payee.toLowerCase().includes(q) || p.description.toLowerCase().includes(q)));
+  }, [ledger, query, card, reviewOnly, who]);
+
   const days = new Map<string, Transaction[]>();
   for (const t of filtered.slice(0, limit)) days.set(t.date, [...(days.get(t.date) ?? []), t]);
 
@@ -65,7 +76,31 @@ export function Activity({ ledger, onOpen, reviewOnly, setReviewOnly, onChange, 
         </div>
       )}
 
-      {filtered.length === 0 && (
+      {pending.length > 0 && (
+        <div>
+          <div className="day-head">
+            <span>Pending · not posted yet</span>
+            <span>{formatUSD(pending.reduce((s, p) => s + p.amount, 0))}</span>
+          </div>
+          <div className="list">
+            {pending.map((p) => (
+              <div className="row pending-row" key={`${p.card}:${p.id}`}>
+                <div className="grow">
+                  <div className="title">{p.payee} <span className="badge">Pending</span></div>
+                  <div className="tiny muted title">
+                    {new Date(`${p.date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    {' · '}{accountLabel(ledger, p.category)} · {accountLabel(ledger, p.card)}
+                  </div>
+                </div>
+                <span className={`amt muted ${p.amount < 0 ? 'good' : ''}`}>{p.amount < 0 ? `+${formatUSD(-p.amount)}` : formatUSD(p.amount)}</span>
+              </div>
+            ))}
+          </div>
+          <p className="tiny muted pending-note">Pending charges show here until they post (usually 1–3 days), then they’re added to your books for review.</p>
+        </div>
+      )}
+
+      {filtered.length === 0 && pending.length === 0 && (
         <div className="card muted small">
           {ledger.transactions.length === 0 ? 'No spending yet. Tap + to add your first purchase.' : 'Nothing matches.'}
         </div>

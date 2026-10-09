@@ -58,7 +58,7 @@ describe('daily import job', () => {
 
     const first = await run('node', ['importer/import.mjs'], { env });
     expect(first.stdout).toContain('Connected to SimpleFIN');
-    expect(first.stdout).toContain('Fetched 1 posted transactions from 1 accounts');
+    expect(first.stdout).toContain('Fetched 1 posted and 1 pending transactions from 1 accounts');
     expect(first.stdout).toContain('SimpleFIN notice: Chase: please reauthenticate soon');
     expect(first.stdout).not.toMatch(/secret|user1|STARBUCKS|127\.0\.0\.1/);
     expect(lastAuth).toBe(`Basic ${Buffer.from('user1:secret+pw').toString('base64')}`);
@@ -70,7 +70,7 @@ describe('daily import job', () => {
     expect(files).toHaveLength(1);
     const sealed = JSON.parse(readFileSync(join(dir, 'inbox', files[0]), 'utf8'));
     const payload = await openImport(sealed, [key]) as { transactions: Array<{ id: string }> };
-    expect(payload.transactions.map((t) => t.id)).toEqual(['T1']);
+    expect(payload.transactions.map((t) => t.id)).toEqual(['T1', 'T2']);
 
     // Second run reuses the stored access (the setup token is single-use).
     const second = await run('node', ['importer/import.mjs'], { env });

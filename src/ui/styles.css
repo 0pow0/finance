@@ -231,3 +231,6 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
 .bar.person > div { background: var(--accent); }
 .seg button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chip-owner { opacity: 0.75; font-size: 0.9em; }
+
+.pending-row { opacity: 0.85; }
+.pending-note { margin: 6px 4px 0; }

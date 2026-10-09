@@ -68,6 +68,8 @@ export interface Ledger {
   lastImportAt?: string;
   /** Bank-feed account ids present in the most recent import (older ones were removed or re-linked). */
   lastImportAccounts?: string[];
+  /** Charges the bank shows as pending, per card: a snapshot replaced by each import. Not part of the books. */
+  pendingCharges?: Record<string, { fetchedAt: string; items: PendingCharge[] }>;
   /** Latest balance the bank reported for each card (ledger account name -> balance). */
   bankBalances?: Record<string, BankBalance>;
   /** Household members, for per-person spending. */
@@ -85,6 +87,17 @@ export interface BankBalance {
   /** Pending (not yet posted) charges, same sign. */
   pending: Cents;
   fetchedAt: string;
+}
+
+export interface PendingCharge {
+  id: string;
+  date: string;
+  payee: string;
+  description: string;
+  /** Positive = a charge; negative = a pending refund/credit. */
+  amount: Cents;
+  /** Best-guess category, for display. */
+  category: string;
 }
 
 export const OPENING_ACCOUNT = 'Equity:Opening-Balances';
@@ -372,6 +385,7 @@ export function startOver(ledger: Ledger): Ledger {
     transactions: [],
     tombstones: {},
     bankBalances: {},
+    pendingCharges: {},
     accounts: ledger.accounts.map((a) => ({ ...a, updatedAt: at })),
     budgets: ledger.budgets.map((b) => ({ ...b, updatedAt: at })),
   };

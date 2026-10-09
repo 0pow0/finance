@@ -3,7 +3,7 @@
 import { addDays, todayISO } from './dates';
 import {
   OPENING_ACCOUNT, isCard, newId, nowISO, toAccountComponent,
-  type BankBalance, type ImportAccount, type Ledger, type Transaction,
+  type BankBalance, type ImportAccount, type Ledger, type PendingCharge, type Transaction,
 } from './ledger';
 import { parseCents } from './money';
 
@@ -206,6 +206,31 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
     });
   }
 
+  // Pending charges: replace each card's snapshot with what the bank shows now.
+  const pendingCharges: NonNullable<Ledger['pendingCharges']> = { ...ledger.pendingCharges };
+  for (const a of payload.accounts) {
+    const target = importAccounts[a.id]?.account;
+    if (!target) continue;
+    if (pendingCharges[target] && pendingCharges[target].fetchedAt > payload.fetchedAt) continue;
+    const items: PendingCharge[] = [];
+    for (const t of payload.transactions) {
+      if (!t.pending || t.account !== a.id) continue;
+      const cents = parseCents(t.amount);
+      if (cents === null || cents === 0) continue;
+      const raw = (t.payee || t.description || '').trim();
+      const payee = cleanPayee(raw) || 'Unknown';
+      items.push({
+        id: `${t.account}:${t.id}`,
+        date: localDate(t.transactedAt || t.posted || Date.parse(payload.fetchedAt) / 1000),
+        payee,
+        description: raw,
+        amount: -cents,
+        category: guessCategory(working, payee, raw),
+      });
+    }
+    pendingCharges[target] = { fetchedAt: payload.fetchedAt, items: items.sort((x, y) => (x.date < y.date ? 1 : -1)) };
+  }
+
   // Bank balances, and a starting balance per card so the ledger can match the bank.
   const bankBalances: Record<string, BankBalance> = { ...ledger.bankBalances };
   const allTxns = [...ledger.transactions, ...added];
@@ -267,6 +292,7 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
     ledger: {
       ...ledger, accounts, importAccounts, transactions: [...ledger.transactions, ...added], lastImportAt,
       ...(Object.keys(bankBalances).length ? { bankBalances } : {}),
+      ...(Object.keys(pendingCharges).length ? { pendingCharges } : {}),
       ...(lastImportAccounts ? { lastImportAccounts } : {}),
     },
     added: added.filter((t) => !t.externalId?.startsWith('opening:')).length,
@@ -296,4 +322,11 @@ export function importedCount(ledger: Ledger, importAccountId: string): { total:
     if (t.flag === '!') unreviewed++;
   }
   return { total, unreviewed };
+}
+
+/** All pending charges, newest first, with the card they're on. */
+export function allPending(ledger: Ledger): Array<PendingCharge & { card: string }> {
+  return Object.entries(ledger.pendingCharges ?? {})
+    .flatMap(([card, snap]) => snap.items.map((p) => ({ ...p, card })))
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }

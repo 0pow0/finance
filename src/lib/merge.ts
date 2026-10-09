@@ -92,6 +92,14 @@ export function mergeLedgers(a: Ledger, b: Ledger): Ledger {
     }
   }
   if (Object.keys(bankBalances).length) merged.bankBalances = bankBalances;
+  const pendingCharges: NonNullable<Ledger['pendingCharges']> = {};
+  for (const side of [a, b]) {
+    for (const [acct, snap] of Object.entries(side.pendingCharges ?? {})) {
+      if (reset && ts(side.resetAt) < reset && snap.fetchedAt < reset) continue;
+      if (!pendingCharges[acct] || snap.fetchedAt > pendingCharges[acct].fetchedAt) pendingCharges[acct] = snap;
+    }
+  }
+  if (Object.keys(pendingCharges).length) merged.pendingCharges = pendingCharges;
   const peopleSide = ts(a.peopleUpdatedAt) >= ts(b.peopleUpdatedAt) ? a : b;
   if (peopleSide.people) {
     merged.people = peopleSide.people;

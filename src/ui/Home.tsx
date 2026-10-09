@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { adjustToBank, cardBalances, type CardBalance } from '../lib/balances';
+import { allPending } from '../lib/importer';
 import { budgetReport, categorySpending, entryFor, spendingByPerson, type BudgetRow } from '../lib/budget';
 import { addMonths, monthLabel, monthOf, todayISO } from '../lib/dates';
 import {
@@ -68,6 +69,7 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
           <div>
             <p className="muted small">Spent</p>
             <p className="big-number">{formatUSD(report.totalSpent)}</p>
+            {pendingTotal(ledger) !== 0 && <p className="tiny muted">+ {formatUSD(pendingTotal(ledger))} pending</p>}
           </div>
           {report.rows.length > 0 && (
             <div className="right">
@@ -81,7 +83,7 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
       <ByPerson ledger={ledger} byPerson={byPerson} views={views} total={report.totalSpent}
         onPick={setPerson} onOpenSettings={onOpenSettings} />
 
-      <CardsSection balances={balances} onPick={setViewingCard} />
+      <CardsSection ledger={ledger} balances={balances} onPick={setViewingCard} />
 
       <div className="spread">
         <h3>Budgets</h3>
@@ -290,6 +292,7 @@ function PersonView({ ledger, month, person, total, familyTotal, onPick }: {
           <div>
             <p className="muted small">{person === SHARED ? 'Shared cards spent' : `${person} spent`}</p>
             <p className="big-number">{formatUSD(total)}</p>
+            {pendingTotal(ledger, undefined, person) !== 0 && <p className="tiny muted">+ {formatUSD(pendingTotal(ledger, undefined, person))} pending</p>}
           </div>
           {familyTotal > 0 && (
             <div className="right">
@@ -381,6 +384,17 @@ function CategorySheet({ ledger, account, month, person, onClose, onOpenTxn, onE
   );
 }
 
+function pendingTotal(ledger: Ledger, card?: string, person?: string): number {
+  const owners = ownerMap(ledger);
+  return allPending(ledger)
+    .filter((p) => (!card || p.card === card) && (!person || owners.get(p.card) === person))
+    .reduce((s, p) => s + p.amount, 0);
+}
+
+function shortDate(d: string): string {
+  return new Date(`${d}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 function statusLine(c: CardBalance): { text: string; cls: string } {
   if (!c.bank) return { text: 'No bank balance yet', cls: 'muted' };
   if (c.bank.status === 'match') return { text: '✓ Matches bank', cls: 'good' };
@@ -388,8 +402,10 @@ function statusLine(c: CardBalance): { text: string; cls: string } {
   return { text: `⚠ Off by ${formatUSD(Math.abs(c.bank.difference))}`, cls: 'bad' };
 }
 
-function CardsSection({ balances, onPick }: { balances: CardBalance[]; onPick: (account: string) => void }) {
+function CardsSection({ ledger, balances, onPick }: { ledger: Ledger; balances: CardBalance[]; onPick: (account: string) => void }) {
   if (!balances.length) return null;
+  const pendingByCard: Record<string, number> = {};
+  for (const p of allPending(ledger)) pendingByCard[p.card] = (pendingByCard[p.card] ?? 0) + p.amount;
   const total = balances.reduce((s, c) => s + c.owed, 0);
   return (
     <>
@@ -405,6 +421,10 @@ function CardsSection({ balances, onPick }: { balances: CardBalance[]; onPick: (
               <div className="grow">
                 <div className="title">{c.account.label}{c.account.owner ? <span className="tiny muted"> · {c.account.owner}</span> : null}</div>
                 <div className={`tiny ${st.cls}`}>{st.text}</div>
+                <div className="tiny muted">
+                  {c.bank ? `Bank data as of ${shortDate(c.bank.asOf)}` : ''}
+                  {pendingByCard[c.account.name] ? `${c.bank ? ' · ' : ''}${formatUSD(pendingByCard[c.account.name])} pending` : ''}
+                </div>
               </div>
               <span className="amt">{formatUSD(c.owed)}</span>
             </button>
@@ -433,6 +453,7 @@ function CardBalanceSheet({ ledger, card, onClose, onOpenTxn, onAdjust }: {
           <div className="spread"><span className="muted small">You owe (this app)</span><span className="amt"><strong>{formatUSD(card.owed)}</strong></span></div>
           {b ? (
             <>
+              <div className="spread"><span className="muted small">Bank data as of</span><span className="small">{asOf}</span></div>
               <div className="spread"><span className="muted small">This app on {asOf}</span><span className="amt">{formatUSD(b.ledgerOwed)}</span></div>
               <div className="spread"><span className="muted small">Bank says on {asOf}</span><span className="amt">{formatUSD(b.owed)}</span></div>
               {b.pending !== 0 && <div className="spread"><span className="muted small">Pending at the bank</span><span className="amt">{formatUSD(b.pending)}</span></div>}
@@ -460,6 +481,22 @@ function CardBalanceSheet({ ledger, card, onClose, onOpenTxn, onAdjust }: {
         )}
         {b?.status === 'pending' && (
           <p className="small muted">The bank includes charges that haven’t posted yet. They’ll be imported once they post, and the check will pass.</p>
+        )}
+        {(ledger.pendingCharges?.[card.account.name]?.items.length ?? 0) > 0 && (
+          <>
+            <h3>Pending · not posted yet</h3>
+            <div className="list">
+              {ledger.pendingCharges![card.account.name].items.map((p) => (
+                <div className="row" key={p.id}>
+                  <div className="grow">
+                    <div className="title">{p.payee} <span className="badge">Pending</span></div>
+                    <div className="tiny muted">{shortDate(p.date)}</div>
+                  </div>
+                  <span className="amt muted">{formatUSD(p.amount)}</span>
+                </div>
+              ))}
+            </div>
+          </>
         )}
         <h3>Recent on this card</h3>
         <div className="list">

@@ -18,11 +18,25 @@ function payload(txns: ImportPayload['transactions'], accounts?: ImportPayload['
 
 describe('cleanPayee', () => {
   it('tidies common card descriptions', () => {
-    expect(cleanPayee('TST* BLUE BOTTLE COFFEE 00123 OAKLAND CA')).toBe('Blue Bottle Coffee');
-    expect(cleanPayee('SQ *JOES PIZZA')).toBe('Joes Pizza');
-    expect(cleanPayee("TRADER JOE'S #552")).toBe("Trader Joe's");
-    expect(cleanPayee('Netflix.com')).toBe('Netflix.com');
-    expect(cleanPayee('NETFLIX.COM')).toBe('Netflix.com');
+    const cases: Array<[string, string]> = [
+      ['TST* BLUE BOTTLE COFFEE 00123 OAKLAND CA', 'Blue Bottle Coffee'],
+      ['SQ *JOES PIZZA', 'Joes Pizza'],
+      ["TRADER JOE'S #552", 'Trader Joe’s'],
+      ['TRADER JOE S #552 OAKLAND CA', 'Trader Joe’s'],
+      ['NETFLIX.COM', 'Netflix'],
+      ['CVS/PHARMACY #09812', 'CVS'],
+      ['AMC THEATRES 2201', 'AMC Theatres'],
+      ['PG&E WEB ONLINE', 'PG&E'],
+      ['UBER   *TRIP HELP.UBER.COM', 'Uber'],
+      ['AMAZON MKTPL*2K4L19', 'Amazon'],
+      ['COSTCO WHSE #0482', 'Costco'],
+      ['DOORDASH*THAI BASIL KITCHEN', 'DoorDash'],
+      ['SQ *SIGHTGLASS COFFEE ROASTERS SAN FRANCISCO CA', 'Sightglass Coffee Roasters'],
+      ['THE CHEESECAKE FACTORY 0123', 'The Cheesecake Factory'],
+      ['IN-N-OUT BURGER 123', 'In-N-Out Burger'],
+      ['Blue Bottle Coffee', 'Blue Bottle Coffee'],
+    ];
+    for (const [raw, want] of cases) expect([raw, cleanPayee(raw)]).toEqual([raw, want]);
   });
 });
 
@@ -41,13 +55,13 @@ describe('applyImport', () => {
     expect(ledger.importAccounts!['ACT-chase'].account).toBe('Liabilities:CreditCard:Chase');
     expect(ledger.importAccounts!['ACT-amex'].account).toBe('Liabilities:CreditCard:Amex');
     const byPayee = Object.fromEntries(ledger.transactions.map((t) => [t.payee, t]));
-    expect(byPayee["Trader Joe's"].postings).toEqual([
+    expect(byPayee["Trader Joe’s"].postings).toEqual([
       { account: 'Expenses:Food:Groceries', amount: 8423 },
       { account: 'Liabilities:CreditCard:Chase', amount: -8423 },
     ]);
-    expect(byPayee["Trader Joe's"]).toMatchObject({ flag: '!', source: 'simplefin', date: '2026-10-06' });
-    expect(byPayee['Shell Oil'].postings[0].account).toBe('Expenses:Transport:Gas');
-    expect(byPayee['Target Refund'].postings[0]).toEqual({ account: 'Expenses:Shopping:General', amount: -1999 });
+    expect(byPayee["Trader Joe’s"]).toMatchObject({ flag: '!', source: 'simplefin', date: '2026-10-06' });
+    expect(byPayee['Shell'].postings[0].account).toBe('Expenses:Transport:Gas');
+    expect(byPayee['Target'].postings[0]).toEqual({ account: 'Expenses:Shopping:General', amount: -1999 });
     expect(byPayee['Card payment'].postings).toEqual([
       { account: 'Assets:Bank:Checking', amount: -50000 },
       { account: 'Liabilities:CreditCard:Chase', amount: 50000 },
@@ -56,7 +70,7 @@ describe('applyImport', () => {
     // Same file again: nothing new.
     expect(applyImport(ledger, p).added).toBe(0);
     // Deleted imports don't come back.
-    const shell = byPayee['Shell Oil'];
+    const shell = byPayee['Shell'];
     expect(applyImport(deleteTransaction(ledger, shell.id), p).added).toBe(0);
   });
 
@@ -73,7 +87,7 @@ describe('applyImport', () => {
       [{ id: 'ACT-c1', name: 'Venture X', org: 'Capital One', currency: 'USD' }],
     ));
     expect(ledger.importAccounts!['ACT-c1'].account).toBe('Liabilities:CreditCard:Venture-X');
-    expect(ledger.accounts.some((a) => a.name === 'Liabilities:CreditCard:Venture-X' && a.label === 'Venture X')).toBe(true);
+    expect(ledger.accounts.some((a) => a.name === 'Liabilities:CreditCard:Venture-X' && a.label === 'Capital One Venture X')).toBe(true);
     expect(ledger.transactions[0].postings[0].account).toBe('Expenses:Transport:Rideshare');
   });
 });
@@ -119,7 +133,7 @@ describe('re-linked bank accounts', () => {
     expect(res.added).toBe(1);
     expect(ledger.importAccounts!['new-amex'].account).toBe('Liabilities:CreditCard:Amex');
     expect(ledger.accounts.filter((a) => a.name.startsWith('Liabilities:CreditCard:'))).toHaveLength(2); // Chase + Amex only
-    expect(ledger.transactions.map((t) => t.payee).sort()).toEqual(['Uber Trip', 'Whole Foods']);
+    expect(ledger.transactions.map((t) => t.payee).sort()).toEqual(['Uber', 'Whole Foods']);
   });
 
   it('two different people with same-named cards stay separate', () => {
@@ -153,5 +167,21 @@ describe('pending charges', () => {
     // An older import arriving late doesn't bring stale pending back.
     ({ ledger } = applyImport(ledger, { ...payload([pend], acct), fetchedAt: '2026-10-08T12:00:00Z' }));
     expect(allPending(ledger)).toEqual([]);
+  });
+});
+
+describe('card names', () => {
+  it('names cards after the bank account', async () => {
+    const { cardLabel } = await import('./importer');
+    expect(cardLabel({ name: 'Sapphire Preferred', org: 'Chase Bank' })).toBe('Chase Sapphire Preferred');
+    expect(cardLabel({ name: 'Gold Card', org: 'American Express' })).toBe('Amex Gold Card');
+    expect(cardLabel({ name: 'CHASE FREEDOM (...4321)', org: 'Chase' })).toBe('CHASE FREEDOM');
+    const { ledger } = applyImport(newLedger('2026-10-01'), payload([], [
+      { id: 'x', name: 'Sapphire Preferred', org: 'Chase Bank', currency: 'USD' },
+      { id: 'y', name: 'Gold Card', org: 'American Express', currency: 'USD' },
+    ]));
+    const label = (n: string) => ledger.accounts.find((a) => a.name === n)!.label;
+    expect(label('Liabilities:CreditCard:Chase')).toBe('Chase Sapphire Preferred');
+    expect(label('Liabilities:CreditCard:Amex')).toBe('Amex Gold Card');
   });
 });

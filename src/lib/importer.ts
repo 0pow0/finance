@@ -35,16 +35,71 @@ export function assertPayload(x: unknown): asserts x is ImportPayload {
   if (!p || p.v !== 1 || !Array.isArray(p.accounts) || !Array.isArray(p.transactions)) throw new Error('Bad import file');
 }
 
+/** Well-known merchants whose bank descriptions are hard to clean generically. */
+const KNOWN_MERCHANTS: Array<[RegExp, string]> = [
+  [/^(amzn|amazon)\b|amazon\.com|amzn mktp/i, 'Amazon'],
+  [/uber\s*\*?\s*eats/i, 'Uber Eats'],
+  [/^uber\b/i, 'Uber'],
+  [/^lyft\b/i, 'Lyft'],
+  [/^doordash\b/i, 'DoorDash'],
+  [/^grubhub\b/i, 'Grubhub'],
+  [/^instacart\b/i, 'Instacart'],
+  [/^costco\b/i, 'Costco'],
+  [/^trader joe/i, 'Trader Joe’s'],
+  [/^whole ?foods/i, 'Whole Foods'],
+  [/^cvs\b/i, 'CVS'],
+  [/^walgreens\b/i, 'Walgreens'],
+  [/^pg ?& ?e\b/i, 'PG&E'],
+  [/^amc\b/i, 'AMC Theatres'],
+  [/^netflix/i, 'Netflix'],
+  [/^spotify/i, 'Spotify'],
+  [/^apple\.com|^apple store/i, 'Apple'],
+  [/^google\b/i, 'Google'],
+  [/^target\b/i, 'Target'],
+  [/^walmart|^wal-mart|^wm supercenter/i, 'Walmart'],
+  [/^starbucks/i, 'Starbucks'],
+  [/^(the )?home depot/i, 'The Home Depot'],
+  [/^lowe'?s\b/i, 'Lowe’s'],
+  [/^chipotle/i, 'Chipotle'],
+  [/^mcdonald/i, 'McDonald’s'],
+  [/^shell\b/i, 'Shell'],
+  [/^chevron/i, 'Chevron'],
+  [/^united airlines|^united \d/i, 'United Airlines'],
+  [/^delta air/i, 'Delta Air Lines'],
+  [/^southwest/i, 'Southwest Airlines'],
+  [/^safeway/i, 'Safeway'],
+  [/^7-eleven|^7 eleven/i, '7-Eleven'],
+];
+
+const SMALL_WORDS = new Set(['and', 'or', 'of', 'the', 'a', 'an', 'in', 'on', 'at', 'for', 'to', 'by']);
+const KEEP_UPPER = /^(?:[A-Z]{2,3}|[A-Z]&[A-Z]|[A-Z]+&[A-Z]+)$/; // CVS, AMC, PG&E, H&M
+const DROP_WORDS = /\b(WHSE|MKTPL|MKTP|PMT|PYMT|ONLINE|WEB|INC|LLC|CO|CORP|USA|US|STORE)\b/gi;
+
+function titleCase(s: string): string {
+  return s.split(' ').map((w, i) => {
+    if (KEEP_UPPER.test(w) && !SMALL_WORDS.has(w.toLowerCase())) return w;
+    const lower = w.toLowerCase();
+    if (i > 0 && SMALL_WORDS.has(lower)) return lower;
+    return lower.replace(/(^|[-/])([a-z])/g, (_, sep, c) => sep + c.toUpperCase());
+  }).join(' ');
+}
+
 /** "TST* BLUE BOTTLE COFFEE #123 OAKLAND CA" -> "Blue Bottle Coffee" (best effort). */
 export function cleanPayee(raw: string): string {
-  let s = raw.trim().replace(/\s+/g, ' ');
-  s = s.replace(/^(SQ|TST|PY|SP|DD|PP|IC|GOOGLE|PAYPAL|APL|AMZN MKTP US)\s*\*\s*/i, '');
-  s = s.replace(/\s+(#\d+|\d{3,}).*$/, ''); // store numbers and what follows
-  s = s.replace(/\s+[A-Z][A-Za-z]+\s+[A-Z]{2}$/, (m) => (/[a-z]/.test(m) ? m : '')); // trailing "CITY ST"
-  s = s.replace(/[*#]+\s*$/, '').trim();
-  if (!s) s = raw.trim();
+  const original = raw.trim().replace(/\s+/g, ' ');
+  for (const [re, name] of KNOWN_MERCHANTS) if (re.test(original)) return name;
+  let s = original.replace(/^(SQ|TST|PY|SP|DD|PP|IC|PAYPAL|APL|BT|CKE|SPO|FS)\s*\*\s*/i, '');
+  const star = s.indexOf('*');
+  if (star > 0) s = s.slice(0, star); // "MERCHANT*REFERENCE": keep the merchant
+  s = s.replace(/\s+(#\s*\d+|\d{3,}).*$/, ''); // store numbers and what follows
+  s = s.replace(/\s+[A-Z][A-Z]+(?:\s+[A-Z]+)?\s+[A-Z]{2}$/, ''); // trailing "CITY ST"
+  s = s.replace(/\b(\w+) S\b/g, "$1'S"); // "JOE S" -> "JOE'S"
+  s = s.replace(/\b[\w-]+\.(com|net|org)\b.*$/i, (m) => (s.trim() === m.trim() ? m : '')); // trailing web address
+  if (s === s.toUpperCase()) s = s.replace(DROP_WORDS, ' ');
+  s = s.replace(/[*#]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!s) s = original;
   if (s === s.toUpperCase()) {
-    s = s.toLowerCase().replace(/\b([a-z])/g, (c) => c.toUpperCase()).replace(/'S\b/g, "'s");
+    s = titleCase(s).replace(/'S\b/g, "’s").replace(/'s\b/g, '’s');
     s = s.replace(/\.(Com|Net|Org|Io|Co)\b/g, (m) => m.toLowerCase());
   }
   return s;
@@ -97,6 +152,23 @@ export function looksLikeBankAccount(acct: { name: string; org: string }): boole
   return NOT_A_CARD_RE.test(acct.name);
 }
 
+/** "Chase Bank" -> "Chase", "American Express" -> "Amex". */
+function shortBank(org: string): string {
+  if (/american express|amex/i.test(org)) return 'Amex';
+  return org.replace(/\b(bank|n\.?a\.?|card services|financial|credit card)\b/gi, '').replace(/\s+/g, ' ').trim();
+}
+
+/** A clear card name from the bank account, e.g. "Chase Sapphire Preferred", "Amex Gold Card". */
+export function cardLabel(acct: { name: string; org: string }): string {
+  const bank = shortBank(acct.org);
+  const name = acct.name.replace(/\s*\(?[.…]*\d{4}\)?\s*$/, '').trim(); // drop "(...1234)"
+  if (!name) return bank || acct.org;
+  if (!bank || name.toLowerCase().includes(bank.toLowerCase())) return name;
+  return `${bank} ${name}`;
+}
+
+const DEFAULT_CARD_LABELS = new Set(['Chase', 'American Express']);
+
 /** Pick which ledger card a newly seen bank account should import into. */
 function autoMap(ledger: Ledger, mapped: Set<string>, acct: { name: string; org: string }): { account: string; create?: string } {
   const text = `${acct.org} ${acct.name}`.toLowerCase();
@@ -108,7 +180,7 @@ function autoMap(ledger: Ledger, mapped: Set<string>, acct: { name: string; org:
   const base = `Liabilities:CreditCard:${toAccountComponent(acct.name || acct.org)}`;
   let name = base;
   for (let i = 2; ledger.accounts.some((a) => a.name === name); i++) name = `${base}-${i}`;
-  return { account: name, create: acct.name || acct.org };
+  return { account: name, create: cardLabel(acct) };
 }
 
 function localDate(unix: number): string {
@@ -276,6 +348,15 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
     allTxns.push(opening);
   }
 
+  // Give cards still called just "Chase" / "American Express" the bank account's name.
+  for (const a of payload.accounts) {
+    const target = importAccounts[a.id]?.account;
+    const card = target && accounts.find((x) => x.name === target);
+    if (card && DEFAULT_CARD_LABELS.has(card.label)) {
+      accounts = accounts.map((x) => (x.name === target ? { ...x, label: cardLabel(a), updatedAt: now } : x));
+    }
+  }
+
   // Make sure every account used exists and opens on or before its first use.
   for (const t of added) {
     for (const p of t.postings) {
@@ -290,7 +371,7 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
   const lastImportAccounts = newest ? payload.accounts.map((a) => a.id) : ledger.lastImportAccounts;
   return {
     ledger: {
-      ...ledger, accounts, importAccounts, transactions: [...ledger.transactions, ...added], lastImportAt,
+      ...ledger, accounts, importAccounts, transactions: [...recleaned(ledger.transactions, now), ...added], lastImportAt,
       ...(Object.keys(bankBalances).length ? { bankBalances } : {}),
       ...(Object.keys(pendingCharges).length ? { pendingCharges } : {}),
       ...(lastImportAccounts ? { lastImportAccounts } : {}),
@@ -329,4 +410,13 @@ export function allPending(ledger: Ledger): Array<PendingCharge & { card: string
   return Object.entries(ledger.pendingCharges ?? {})
     .flatMap(([card, snap]) => snap.items.map((p) => ({ ...p, card })))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
+
+/** Re-apply the store-name cleanup to imported transactions that haven't been reviewed yet. */
+function recleaned(txns: Transaction[], now: string): Transaction[] {
+  return txns.map((t) => {
+    if (t.source !== 'simplefin' || t.flag !== '!' || !t.narration || t.payee === 'Card payment') return t;
+    const payee = cleanPayee(t.narration);
+    return payee && payee !== t.payee ? { ...t, payee, updatedAt: now } : t;
+  });
 }

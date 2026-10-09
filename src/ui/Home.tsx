@@ -74,7 +74,7 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
           {report.rows.length > 0 && (
             <div className="right">
               <p className="muted small">Left in budgets</p>
-              <p className={`big-number ${left < 0 ? 'bad' : ''}`}>{formatUSD(left)}</p>
+              <p className={`mid-number ${left < 0 ? 'bad' : ''}`}>{formatUSD(left)}</p>
             </div>
           )}
         </div>
@@ -85,9 +85,9 @@ export function Home({ ledger, month, setMonth, onChange, reviewCount, onReview,
 
       <CardsSection ledger={ledger} balances={balances} onPick={setViewingCard} />
 
-      <div className="spread">
+      <div className="section-head">
         <h3>Budgets</h3>
-        <button className="btn link" onClick={() => setEditing({})}>+ Add budget</button>
+        <button className="btn link small-link" onClick={() => setEditing({})}>+ Add budget</button>
       </div>
       {report.rows.length === 0 ? (
         <div className="card muted small">
@@ -184,8 +184,7 @@ function BudgetEditor({ ledger, account, month, onSave, onClose }: {
   }
 
   return (
-    <Sheet title={existing ? 'Edit budget' : 'New budget'} onClose={onClose}
-      action={<button className="btn link" onClick={() => save()}><strong>Save</strong></button>}>
+    <Sheet title={existing ? 'Edit budget' : 'New budget'} onClose={onClose}>
       <div className="stack">
         <label className="field">
           <span>Category</span>
@@ -297,7 +296,7 @@ function PersonView({ ledger, month, person, total, familyTotal, onPick }: {
           {familyTotal > 0 && (
             <div className="right">
               <p className="muted small">Share of family</p>
-              <p className="big-number">{Math.round((total / familyTotal) * 100)}%</p>
+              <p className="mid-number">{Math.round((total / familyTotal) * 100)}%</p>
             </div>
           )}
         </div>
@@ -363,7 +362,7 @@ function CategorySheet({ ledger, account, month, person, onClose, onOpenTxn, onE
                 <button className="row" key={t.id} onClick={() => onOpenTxn(t)}>
                   <div className="grow">
                     <div className="title">
-                      {t.payee || t.narration || '(no payee)'} {t.flag === '!' && <span className="badge review">Review</span>}
+                      {t.flag === '!' && <span className="new-dot on inline" aria-label="Needs review" />}{t.payee || t.narration || '(no payee)'}
                     </div>
                     <div className="tiny muted title">
                       {new Date(`${t.date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
@@ -409,7 +408,7 @@ function CardsSection({ ledger, balances, onPick }: { ledger: Ledger; balances: 
   const total = balances.reduce((s, c) => s + c.owed, 0);
   return (
     <>
-      <div className="spread">
+      <div className="section-head">
         <h3>Cards</h3>
         <span className="small muted">You owe {formatUSD(total)}</span>
       </div>
@@ -489,7 +488,7 @@ function CardBalanceSheet({ ledger, card, onClose, onOpenTxn, onAdjust }: {
               {ledger.pendingCharges![card.account.name].items.map((p) => (
                 <div className="row" key={p.id}>
                   <div className="grow">
-                    <div className="title">{p.payee} <span className="badge">Pending</span></div>
+                    <div className="title">{p.payee}</div>
                     <div className="tiny muted">{shortDate(p.date)}</div>
                   </div>
                   <span className="amt muted">{formatUSD(p.amount)}</span>

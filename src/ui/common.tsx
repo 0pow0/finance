@@ -17,9 +17,9 @@ export function Sheet({ title, onClose, children, action }: {
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <div className="sheet-head">
-          <button className="btn link" onClick={onClose}>Cancel</button>
-          <h2>{title}</h2>
-          <div>{action}</div>
+          <button className="btn link sheet-cancel" onClick={onClose}>Cancel</button>
+          <h2 className="sheet-title">{title}</h2>
+          <div className="sheet-action">{action}</div>
         </div>
         {children}
       </div>

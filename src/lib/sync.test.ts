@@ -95,7 +95,7 @@ describe('sync', () => {
     const res = await syncLedger(la, deps(repo, a, 'A'));
     expect(res.imported).toBe(1);
     la = res.ledger;
-    expect(la.transactions[0]).toMatchObject({ payee: 'Starbucks Store', flag: '!' });
+    expect(la.transactions[0]).toMatchObject({ payee: 'Starbucks', flag: '!' });
     expect(la.transactions[0].postings[0]).toEqual({ account: 'Expenses:Food:Coffee', amount: 1250 });
     expect(await repo.listDir(INBOX_DIR)).toHaveLength(0);
   });

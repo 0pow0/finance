@@ -122,12 +122,15 @@ export function TxnEditor({ ledger, txn, onSave, onDelete, onClose }: {
   }
 
   return (
-    <Sheet title={txn ? 'Edit' : 'New spending'} onClose={onClose}
-      action={<button className="btn link" onClick={save}><strong>Save</strong></button>}>
+    <Sheet title={txn ? 'Edit' : 'New spending'} onClose={onClose}>
       <div className="stack">
         {txn?.flag === '!' && <div className="notice">Imported — check the details and tap Save to mark it reviewed.</div>}
-        <input className="input amount-input" inputMode="decimal" placeholder="$0.00" autoFocus={!txn}
+        <div className="amount-wrap">
+          <span className="amount-currency">$</span>
+          <input className="amount-input" inputMode="decimal" placeholder="0.00" autoFocus={!txn}
+            style={{ width: `${Math.max(4, amount.length) + 0.6}ch` }}
           value={amount} onChange={(e) => setAmount(e.target.value)} aria-label="Amount" />
+        </div>
         <div className="seg">
           <button className={!refund ? 'on' : ''} onClick={() => setRefund(false)}>Purchase</button>
           <button className={refund ? 'on' : ''} onClick={() => setRefund(true)}>Refund</button>

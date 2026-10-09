@@ -54,7 +54,7 @@ export function Activity({ ledger, onOpen, reviewOnly, setReviewOnly, onChange, 
     <div className="stack">
       <h1>Activity</h1>
       <input className="input search" type="search" placeholder="Search payee, note, category" value={query} onChange={(e) => setQuery(e.target.value)} />
-      <div className="chips">
+      <div className="chips scroll">
         <button className={`chip ${!card && !reviewOnly && !who ? 'on' : ''}`} onClick={() => { setCard(''); setWho(''); setReviewOnly(false); }}>All</button>
         {people.map((p) => (
           <button key={p} className={`chip ${who === p ? 'on' : ''}`} onClick={() => setWho(who === p ? '' : p)}>{p}</button>
@@ -86,7 +86,7 @@ export function Activity({ ledger, onOpen, reviewOnly, setReviewOnly, onChange, 
             {pending.map((p) => (
               <div className="row pending-row" key={`${p.card}:${p.id}`}>
                 <div className="grow">
-                  <div className="title">{p.payee} <span className="badge">Pending</span></div>
+                  <div className="title">{p.payee}</div>
                   <div className="tiny muted title">
                     {new Date(`${p.date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                     {' · '}{accountLabel(ledger, p.category)} · {accountLabel(ledger, p.card)}
@@ -116,18 +116,19 @@ export function Activity({ ledger, onOpen, reviewOnly, setReviewOnly, onChange, 
             {txns.map((t) => {
               const { from, to } = txnSides(t);
               const amt = txnAmount(t);
+              const spending = t.postings.some((p) => p.account.startsWith('Expenses:'));
+              const kind = spending ? (to ? accountLabel(ledger, to.account) : '')
+                : t.payee === 'Card payment' ? 'Payment' : 'Bookkeeping';
               return (
                 <button className="row" key={t.id} onClick={() => onOpen(t)}>
+                  <span className={`new-dot ${t.flag === '!' ? 'on' : ''}`} aria-label={t.flag === '!' ? 'Needs review' : undefined} />
                   <div className="grow">
-                    <div className="title">
-                      {t.payee || t.narration || '(no payee)'} {t.flag === '!' && <span className="badge review">Review</span>}
-                    </div>
-                    <div className="tiny muted title">
-                      {to ? accountLabel(ledger, to.account) : ''}{from ? ` · ${accountLabel(ledger, from.account)}` : ''}
-                      {t.narration && t.payee ? ` · ${t.narration}` : ''}
-                    </div>
+                    <div className="title">{t.payee || t.narration || '(no payee)'}</div>
+                    <div className="tiny muted title">{kind}{from ? ` · ${accountLabel(ledger, from.account)}` : ''}</div>
                   </div>
-                  <span className={`amt ${amt < 0 ? 'good' : ''}`}>{amt < 0 ? `+${formatUSD(-amt)}` : formatUSD(amt)}</span>
+                  <span className={`amt ${!spending ? 'muted' : amt < 0 ? 'good' : ''}`}>
+                    {spending && amt < 0 ? `+${formatUSD(-amt)}` : formatUSD(Math.abs(amt))}
+                  </span>
                 </button>
               );
             })}

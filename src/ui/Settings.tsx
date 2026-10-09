@@ -94,8 +94,8 @@ export function Settings({ session, ledger, onChange, onReplace, onLock, onErase
           .map(([id, a]) => (
           <button className="row" key={id} onClick={() => setDialog({ kind: 'bank', id })}>
             <span className="grow">
-              <span className="title">{a.name}</span>
-              <span className="tiny muted"> · {a.org}</span>
+              <span className="title block">{a.name}</span>
+              <span className="tiny muted block">{a.org}</span>
             </span>
             <span className="settings-row-value">
               {a.account ? ledger.accounts.find((x) => x.name === a.account)?.label ?? a.account : 'Not imported'}
@@ -321,8 +321,7 @@ function AccountSheet({ ledger, type, account, onSave, onClose }: {
   }
 
   return (
-    <Sheet title={account ? 'Edit' : type === 'card' ? 'New card' : 'New category'} onClose={onClose}
-      action={<button className="btn link" onClick={save}><strong>Save</strong></button>}>
+    <Sheet title={account ? 'Edit' : type === 'card' ? 'New card' : 'New category'} onClose={onClose}>
       <div className="stack">
         <label className="field">
           <span>Name</span>
@@ -584,8 +583,7 @@ function PersonSheet({ ledger, name, onSave, onClose }: {
   }
 
   return (
-    <Sheet title={name ? 'Edit person' : 'Add a person'} onClose={onClose}
-      action={<button className="btn link" onClick={save}><strong>Save</strong></button>}>
+    <Sheet title={name ? 'Edit person' : 'Add a person'} onClose={onClose}>
       <div className="stack">
         <label className="field">
           <span>Name</span>

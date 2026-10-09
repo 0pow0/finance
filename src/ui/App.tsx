@@ -181,9 +181,9 @@ export function App() {
           <button className={tab === 'activity' ? 'on' : ''} onClick={() => { setReviewOnly(false); setTab('activity'); }}>
             <Icon name="list" />Activity
           </button>
-          <div className="add-slot">
-            <button className="add" aria-label="Add spending" onClick={() => setEditing('new')}><Icon name="plus" /></button>
-          </div>
+          <button className="add" aria-label="Add spending" onClick={() => setEditing('new')}>
+            <span className="add-icon"><Icon name="plus" /></span>Add
+          </button>
           <button className={tab === 'settings' ? 'on' : ''} onClick={() => setTab('settings')}><Icon name="gear" />Settings</button>
         </div>
       </nav>

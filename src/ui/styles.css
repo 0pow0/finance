@@ -172,19 +172,21 @@ button.row:active { background: var(--surface-2); }
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom);
 }
-.tabbar-inner { max-width: 560px; margin: 0 auto; display: flex; align-items: center; }
+.tabbar-inner { max-width: 560px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); align-items: stretch; }
 .tabbar button {
-  flex: 1; border: 0; background: none; min-height: 56px; cursor: pointer;
-  color: var(--muted); font-size: 12px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  border: 0; background: none; min-height: 58px; padding: 6px 0 4px; cursor: pointer;
+  color: var(--muted); font-size: 11px; font-weight: 600; line-height: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
 }
 .tabbar button.on { color: var(--accent); }
 .tabbar svg { width: 24px; height: 24px; }
-.tabbar .add-slot { flex: 1; display: flex; justify-content: center; }
-.tabbar .add {
-  flex: 0 0 auto; width: 56px; height: 56px; min-height: 56px; border-radius: 50%; margin: -20px 0 0;
-  background: var(--accent); color: var(--accent-text); box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+.tabbar .add { color: var(--muted); }
+.tabbar .add-icon {
+  width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--accent-text);
+  display: grid; place-items: center;
 }
-.tabbar .add svg { width: 28px; height: 28px; }
+.tabbar .add-icon svg { width: 16px; height: 16px; stroke-width: 3; }
+.tabbar button:active { opacity: 0.6; }
 
 .sheet-backdrop {
   position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.4);

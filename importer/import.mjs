@@ -121,6 +121,20 @@ async function main() {
     }
   }
   console.log(`Fetched ${transactions.length} posted transactions from ${accounts.length} accounts.`);
+
+  // How fresh each bank's data is (dates and counts only; no amounts or merchants).
+  const day = (unix) => (unix ? new Date(unix * 1000).toISOString().slice(0, 10) : 'unknown');
+  for (const [i, a] of (data.accounts ?? []).entries()) {
+    const txns = a.transactions ?? [];
+    const posted = txns.filter((t) => !t.pending).map((t) => Number(t.posted) || 0);
+    const pendingCount = txns.filter((t) => t.pending).length;
+    const ageDays = a['balance-date'] ? Math.floor((Date.now() / 1000 - Number(a['balance-date'])) / 86400) : null;
+    console.log(
+      `Account ${i + 1} (${a.org?.name ?? a.org?.domain ?? 'bank'}): bank data from ${day(Number(a['balance-date']))}` +
+      `${ageDays !== null ? ` (${ageDays} day${ageDays === 1 ? '' : 's'} old)` : ''}, ` +
+      `newest posted ${posted.length ? day(Math.max(...posted)) : 'none'}, ${pendingCount} pending`,
+    );
+  }
   if (!accounts.length) return; // still send balances on days without new transactions
 
   const fetchedAt = new Date().toISOString();

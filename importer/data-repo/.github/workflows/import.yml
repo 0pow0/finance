@@ -2,7 +2,9 @@ name: Daily bank import
 
 on:
   schedule:
-    - cron: '7 11 * * *' # every day ~7am US Eastern (11:07 UTC)
+    # Four times a day (GitHub often starts scheduled runs late, sometimes by hours).
+    # ~5am, 11am, 5pm and 11pm US Pacific; SimpleFIN allows far more requests than this.
+    - cron: '7 0,6,12,18 * * *'
   workflow_dispatch:
     inputs:
       days:

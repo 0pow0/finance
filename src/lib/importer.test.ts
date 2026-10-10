@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { applyImport, cleanPayee, guessCategory, removeUnreviewedImports, type ImportPayload } from './importer';
-import { deleteTransaction, newLedger, simpleTxn, upsertTransaction } from './ledger';
+import { applyImport, cleanPayee, guessCategory, removeUnreviewedImports, repairRelinks, type ImportPayload } from './importer';
+import { cardBalances } from './balances';
+import { approveTransactions, deleteTransaction, newLedger, simpleTxn, updateAccount, upsertTransaction } from './ledger';
 
 const unix = (d: string) => Date.parse(`${d}T18:00:00Z`) / 1000;
 
@@ -143,6 +144,93 @@ describe('re-linked bank accounts', () => {
     ];
     const { ledger } = applyImport(newLedger('2026-10-01'), payload([], accts));
     expect(ledger.importAccounts!.a1.account).not.toBe(ledger.importAccounts!.a2.account);
+  });
+});
+
+describe('bank reconnect under a new connection name', () => {
+  const cards = (l: ReturnType<typeof newLedger>) => l.accounts.filter((a) => a.name.startsWith('Liabilities:CreditCard:') && !a.deleted);
+  const oldAccts = [
+    { id: 'o1', name: 'Sapphire (1111)', org: 'Chase Bank', currency: 'USD', balance: '-130.00' },
+    { id: 'o2', name: 'Freedom (2222)', org: 'Chase Bank', currency: 'USD', balance: '-20.00' },
+  ];
+  const oldTxns = [
+    { id: 'p1', account: 'o1', posted: unix('2026-10-03'), amount: '-30.00', description: 'WHOLE FOODS #10' },
+    { id: 'p2', account: 'o2', posted: unix('2026-10-04'), amount: '-20.00', description: 'UBER TRIP' },
+  ];
+  function start() {
+    let { ledger } = applyImport(newLedger('2026-10-01'), payload(oldTxns, oldAccts));
+    const c1 = ledger.importAccounts!.o1.account!;
+    const c2 = ledger.importAccounts!.o2.account!;
+    ledger = updateAccount(ledger, c1, { owner: 'Rui' });
+    ledger = updateAccount(ledger, c2, { owner: 'Ziqi' });
+    ledger = approveTransactions(ledger);
+    return { ledger, c1, c2 };
+  }
+  const newTxns = [
+    { id: 'q1', account: 'n1', posted: unix('2026-10-03'), amount: '-30.00', description: 'WHOLE FOODS #10' },
+    { id: 'q2', account: 'n1', posted: unix('2026-10-09'), amount: '-15.00', description: 'SHELL OIL 5744' },
+    { id: 'q3', account: 'n2', posted: unix('2026-10-04'), amount: '-20.00', description: 'UBER TRIP' },
+  ];
+
+  it('relinks to the original cards with no duplicates', () => {
+    const { ledger: l0, c1, c2 } = start();
+    const res = applyImport(l0, { ...payload(newTxns, [
+      { id: 'n1', name: 'Sapphire (1111)', org: 'Chase Bank Rui', currency: 'USD', balance: '-145.00' },
+      { id: 'n2', name: 'Freedom (2222)', org: 'Chase Bank Rui', currency: 'USD', balance: '-20.00' },
+    ]), fetchedAt: '2026-10-10T11:00:00Z' });
+    expect(res.added).toBe(1);
+    expect(res.ledger.importAccounts!.n1.account).toBe(c1);
+    expect(res.ledger.importAccounts!.n2.account).toBe(c2);
+    expect(cards(res.ledger)).toHaveLength(cards(l0).length);
+    expect(cardBalances(res.ledger).filter((b) => b.bank).every((b) => b.bank!.status === 'match')).toBe(true);
+  });
+
+  it('repairs duplicate cards left by an unrecognized reconnect', () => {
+    const { ledger: l0, c1, c2 } = start();
+    // What the old matching did: different-looking accounts got new cards and duplicate purchases.
+    let { ledger } = applyImport(l0, { ...payload(newTxns, [
+      { id: 'n1', name: 'Other A', org: 'Chase Bank Rui', currency: 'USD', balance: '-145.00' },
+      { id: 'n2', name: 'Other B', org: 'Chase Bank Rui', currency: 'USD', balance: '-20.00' },
+    ]), fetchedAt: '2026-10-10T11:00:00Z' });
+    expect(cards(ledger)).toHaveLength(cards(l0).length + 2);
+    ledger = { ...ledger, importAccounts: {
+      ...ledger.importAccounts,
+      n1: { ...ledger.importAccounts!.n1, name: 'Sapphire (1111)' },
+      n2: { ...ledger.importAccounts!.n2, name: 'Freedom (2222)' },
+    } };
+
+    const { ledger: fixed, repaired } = repairRelinks(ledger);
+    expect(repaired).toBe(2);
+    expect(cards(fixed).map((a) => a.name)).toEqual(cards(l0).map((a) => a.name));
+    expect(cards(fixed).filter((a) => a.owner).map((a) => [a.name, a.owner])).toEqual([[c1, 'Rui'], [c2, 'Ziqi']]);
+    expect(fixed.importAccounts!.n1.account).toBe(c1);
+    expect(fixed.importAccounts!.n2.account).toBe(c2);
+    const payees = fixed.transactions.filter((t) => t.source === 'simplefin').map((t) => t.payee).sort();
+    expect(payees).toEqual(['Shell', 'Uber', 'Whole Foods']);
+    // The originals keep their review; only the new purchase waits for review.
+    expect(fixed.transactions.filter((t) => t.flag === '!').map((t) => t.payee)).toEqual(['Shell']);
+    expect(fixed.transactions.filter((t) => t.externalId?.startsWith('opening:'))).toHaveLength(1);
+    expect(Object.keys(fixed.bankBalances!).sort()).toEqual([c1, c2].sort());
+    expect(cardBalances(fixed).filter((b) => b.bank).every((b) => b.bank!.status === 'match')).toBe(true);
+    // Running it again changes nothing; a later import stays clean.
+    expect(repairRelinks(fixed).repaired).toBe(0);
+    const again = applyImport(fixed, { ...payload(newTxns, [
+      { id: 'n1', name: 'Sapphire (1111)', org: 'Chase Bank Rui', currency: 'USD', balance: '-145.00' },
+      { id: 'n2', name: 'Freedom (2222)', org: 'Chase Bank Rui', currency: 'USD', balance: '-20.00' },
+    ]), fetchedAt: '2026-10-10T17:00:00Z' });
+    expect(again.added).toBe(0);
+    expect(cards(again.ledger)).toHaveLength(cards(l0).length);
+  });
+
+  it('leaves same-named cards alone when it cannot tell them apart', () => {
+    const accts = [
+      { id: 'a1', name: 'Gold Card', org: 'American Express', currency: 'USD' },
+      { id: 'a2', name: 'Gold Card', org: 'American Express', currency: 'USD' },
+    ];
+    const { ledger } = applyImport(newLedger('2026-10-01'), payload([], accts));
+    const res = applyImport(ledger, { ...payload([], [{ id: 'a3', name: 'Gold Card', org: 'American Express', currency: 'USD' }]), fetchedAt: '2026-10-09T11:00:00Z' });
+    expect(new Set(Object.values(res.ledger.importAccounts!).map((a) => a.account)).size).toBe(2);
+    expect(repairRelinks(res.ledger).repaired).toBe(0);
   });
 });
 

@@ -169,6 +169,34 @@ export function cardLabel(acct: { name: string; org: string }): string {
 
 const DEFAULT_CARD_LABELS = new Set(['Chase', 'American Express']);
 
+const sameText = (x: string, y: string) => x.trim().toLowerCase() === y.trim().toLowerCase();
+
+/** "Chase Bank", "Chase Bank Rui", "JPMorgan Chase" all count as Chase. */
+function bankBrand(org: string): string {
+  const o = org.toLowerCase();
+  for (const b of ['chase', 'american express', 'amex', 'citi', 'capital one', 'discover', 'wells fargo', 'bank of america', 'us bank', 'barclays', 'apple card']) {
+    if (o.includes(b)) return b === 'amex' ? 'american express' : b;
+  }
+  return shortBank(org).toLowerCase().split(' ')[0] ?? o;
+}
+const sameBank = (x: string, y: string) => bankBrand(x) === bankBrand(y);
+
+/** How many (date, amount) pairs from a bank account's existing imports appear in `incoming`. */
+function overlap(ledger: Ledger, importId: string, incoming: Array<{ date: string; cents: number }>): number {
+  const have = new Map<string, number>();
+  for (const t of ledger.transactions) {
+    if (!t.externalId?.startsWith(`simplefin:${importId}:`)) continue;
+    const card = t.postings.find((p) => isCard(p.account));
+    if (card) have.set(`${t.date}|${card.amount}`, (have.get(`${t.date}|${card.amount}`) ?? 0) + 1);
+  }
+  let n = 0;
+  for (const t of incoming) {
+    const k = `${t.date}|${t.cents}`; // bank sign equals the card posting's sign
+    if ((have.get(k) ?? 0) > 0) { have.set(k, have.get(k)! - 1); n++; }
+  }
+  return n;
+}
+
 /** Pick which ledger card a newly seen bank account should import into. */
 function autoMap(ledger: Ledger, mapped: Set<string>, acct: { name: string; org: string }): { account: string; create?: string } {
   const text = `${acct.org} ${acct.name}`.toLowerCase();
@@ -198,10 +226,16 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
   const inPayload = new Set(payload.accounts.map((a) => a.id));
   const gone = new Map(Object.entries(importAccounts).filter(([id]) => !inPayload.has(id)));
   const relinkedFrom = new Map<string, string>(); // new id -> old id
-  const same = (x: string, y: string) => x.trim().toLowerCase() === y.trim().toLowerCase();
   for (const a of payload.accounts) {
     if (importAccounts[a.id]) continue;
-    const old = [...gone].find(([, o]) => same(o.name, a.name) && same(o.org, a.org));
+    // Same card name at the same bank (the connection's display name may change, e.g. "Chase Bank Rui").
+    // With several candidates, prefer the one whose past transactions overlap this account's.
+    const candidates = [...gone].filter(([, o]) => sameText(o.name, a.name) && sameBank(o.org, a.org));
+    const incoming = payload.transactions.filter((t) => t.account === a.id && !t.pending)
+      .map((t) => ({ date: localDate(t.transactedAt || t.posted), cents: parseCents(t.amount) ?? 0 }));
+    const old = candidates.length <= 1 ? candidates[0] : candidates
+      .map((c) => ({ c, score: overlap(ledger, c[0], incoming) }))
+      .sort((x, y) => y.score - x.score)[0]?.c;
     if (old) {
       gone.delete(old[0]);
       relinkedFrom.set(a.id, old[0]);
@@ -369,15 +403,94 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
   const newest = !ledger.lastImportAt || payload.fetchedAt >= ledger.lastImportAt;
   const lastImportAt = newest ? payload.fetchedAt : ledger.lastImportAt;
   const lastImportAccounts = newest ? payload.accounts.map((a) => a.id) : ledger.lastImportAccounts;
-  return {
-    ledger: {
-      ...ledger, accounts, importAccounts, transactions: [...recleaned(ledger.transactions, now), ...added], lastImportAt,
-      ...(Object.keys(bankBalances).length ? { bankBalances } : {}),
-      ...(Object.keys(pendingCharges).length ? { pendingCharges } : {}),
-      ...(lastImportAccounts ? { lastImportAccounts } : {}),
-    },
-    added: added.filter((t) => !t.externalId?.startsWith('opening:')).length,
+  const result: Ledger = {
+    ...ledger, accounts, importAccounts, transactions: [...recleaned(ledger.transactions, now), ...added], lastImportAt,
+    ...(Object.keys(bankBalances).length ? { bankBalances } : {}),
+    ...(Object.keys(pendingCharges).length ? { pendingCharges } : {}),
+    ...(lastImportAccounts ? { lastImportAccounts } : {}),
   };
+  const repaired = repairRelinks(result);
+  const removed = result.transactions.length - repaired.ledger.transactions.length;
+  return {
+    ledger: repaired.ledger,
+    added: Math.max(0, added.filter((t) => !t.externalId?.startsWith('opening:')).length - removed),
+  };
+}
+
+/**
+ * Undo duplicates left by a bank reconnect that wasn't recognized: a bank account re-added under a
+ * new id (same card name, same bank) got its own new card. Move it back onto the original card,
+ * drop transactions already imported there, the extra starting balance and the extra card.
+ * Owners, categories and reviews on the original card are kept.
+ */
+export function repairRelinks(ledger: Ledger): { ledger: Ledger; repaired: number } {
+  const current = new Set(ledger.lastImportAccounts ?? []);
+  if (!current.size) return { ledger, repaired: 0 };
+  let l = ledger;
+  let repaired = 0;
+  const now = nowISO();
+  for (const [nid, n] of Object.entries(l.importAccounts ?? {})) {
+    if (!current.has(nid) || !n.account) continue;
+    const cardNew = n.account;
+    // Only repair cards that this bank account alone feeds.
+    if (Object.entries(l.importAccounts ?? {}).some(([id, x]) => id !== nid && current.has(id) && x.account === cardNew)) continue;
+    const incoming = l.transactions
+      .filter((t) => t.externalId?.startsWith(`simplefin:${nid}:`))
+      .map((t) => ({ date: t.date, cents: t.postings.find((p) => p.account === cardNew)?.amount ?? 0 }));
+    const candidates = Object.entries(l.importAccounts ?? {}).filter(([oid, o]) =>
+      oid !== nid && !current.has(oid) && o.account && o.account !== cardNew &&
+      sameText(o.name, n.name) && sameBank(o.org, n.org) &&
+      l.accounts.some((a) => a.name === o.account && !a.deleted));
+    if (!candidates.length) continue;
+    const scored = candidates.map(([oid, o]) => ({ oid, card: o.account!, score: overlap(l, oid, incoming) }))
+      .sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    if (candidates.length > 1 && (best.score === 0 || scored[1].score === best.score)) continue; // ambiguous
+    const cardOld = best.card;
+
+    // (date, amount) of what the original account already imported onto the original card.
+    const have = new Map<string, number>();
+    for (const t of l.transactions) {
+      if (!t.externalId?.startsWith(`simplefin:${best.oid}:`)) continue;
+      const amt = t.postings.find((p) => p.account === cardOld)?.amount;
+      if (amt !== undefined) have.set(`${t.date}|${amt}`, (have.get(`${t.date}|${amt}`) ?? 0) + 1);
+    }
+    const tombstones = { ...l.tombstones };
+    const transactions: Transaction[] = [];
+    for (const t of l.transactions) {
+      if (!t.postings.some((p) => p.account === cardNew)) { transactions.push(t); continue; }
+      if (t.externalId === `opening:${cardNew}`) {
+        tombstones[t.id] = { at: now, externalId: t.externalId };
+        continue;
+      }
+      const amt = t.postings.find((p) => p.account === cardNew)!.amount;
+      const k = `${t.date}|${amt}`;
+      if (t.externalId?.startsWith(`simplefin:${nid}:`) && (have.get(k) ?? 0) > 0) {
+        have.set(k, have.get(k)! - 1);
+        tombstones[t.id] = { at: now, externalId: t.externalId };
+        continue;
+      }
+      transactions.push({ ...t, postings: t.postings.map((p) => (p.account === cardNew ? { ...p, account: cardOld } : p)), updatedAt: now });
+    }
+    const moveNewer = <T extends { fetchedAt: string }>(m: Record<string, T> | undefined) => {
+      if (!m?.[cardNew]) return m;
+      const out = { ...m };
+      if (!out[cardOld] || out[cardNew].fetchedAt >= out[cardOld].fetchedAt) out[cardOld] = out[cardNew];
+      delete out[cardNew];
+      return out;
+    };
+    l = {
+      ...l,
+      transactions,
+      tombstones,
+      importAccounts: { ...l.importAccounts, [nid]: { ...n, account: cardOld, updatedAt: now } },
+      accounts: l.accounts.map((a) => (a.name === cardNew ? { ...a, deleted: true, closed: true, updatedAt: now } : a)),
+      ...(l.bankBalances ? { bankBalances: moveNewer(l.bankBalances) } : {}),
+      ...(l.pendingCharges ? { pendingCharges: moveNewer(l.pendingCharges) } : {}),
+    };
+    repaired++;
+  }
+  return { ledger: l, repaired };
 }
 
 /** Remove imported transactions from one bank-feed account that haven't been reviewed yet. */

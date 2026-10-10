@@ -131,6 +131,9 @@ async function main() {
     const posted = txns.filter((t) => !t.pending).map((t) => Number(t.posted) || 0);
     const pendingCount = txns.filter((t) => t.pending).length;
     const ageDays = a['balance-date'] ? Math.floor((Date.now() / 1000 - Number(a['balance-date'])) / 86400) : null;
+    if (ageDays !== null && ageDays >= 2) {
+      console.log(`::warning::Account ${i + 1} (${a.org?.name ?? 'bank'}): SimpleFIN data is ${ageDays} days old. Reconnect this bank in SimpleFIN Bridge.`);
+    }
     console.log(
       `Account ${i + 1} (${a.org?.name ?? a.org?.domain ?? 'bank'}): bank data from ${day(Number(a['balance-date']))}` +
       `${ageDays !== null ? ` (${ageDays} day${ageDays === 1 ? '' : 's'} old)` : ''}, ` +

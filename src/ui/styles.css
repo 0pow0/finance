@@ -273,3 +273,6 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
 .row .tiny { margin-top: 2px; }
 .list .row:active { background: var(--surface-2); }
 .badge.review { font-size: 12px; padding: 3px 10px; background: var(--accent); }
+
+.warn-card { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, var(--surface)); gap: 6px; }
+.badge { white-space: nowrap; flex: 0 0 auto; }

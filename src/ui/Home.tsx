@@ -390,6 +390,10 @@ function pendingTotal(ledger: Ledger, card?: string, person?: string): number {
     .reduce((s, p) => s + p.amount, 0);
 }
 
+function daysBetween(a: string, b: string): number {
+  return Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 86_400_000);
+}
+
 function shortDate(d: string): string {
   return new Date(`${d}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
@@ -406,8 +410,21 @@ function CardsSection({ ledger, balances, onPick }: { ledger: Ledger; balances: 
   const pendingByCard: Record<string, number> = {};
   for (const p of allPending(ledger)) pendingByCard[p.card] = (pendingByCard[p.card] ?? 0) + p.amount;
   const total = balances.reduce((s, c) => s + c.owed, 0);
+  // Bank data that hasn't refreshed in 2+ days means the SimpleFIN connection needs attention.
+  const today = todayISO();
+  const stale = balances.filter((c) => c.bank && daysBetween(c.bank.asOf, today) >= 2);
+  const oldest = stale.map((c) => c.bank!.asOf).sort()[0];
   return (
     <>
+      {stale.length > 0 && (
+        <div className="card warn-card stack">
+          <strong>Bank data hasn’t updated since {shortDate(oldest)}</strong>
+          <span className="small">
+            SimpleFIN stopped getting new data for {stale.length === balances.filter((c) => c.bank).length ? 'your cards' : stale.map((c) => c.account.label).join(', ')}.
+            Open SimpleFIN Bridge, sign in to the bank again (or reconnect it), and new transactions will arrive with the next import.
+          </span>
+        </div>
+      )}
       <div className="section-head">
         <h3>Cards</h3>
         <span className="small muted">You owe {formatUSD(total)}</span>

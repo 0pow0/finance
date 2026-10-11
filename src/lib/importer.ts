@@ -351,7 +351,10 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
     const asOf = localDate(a.balanceDate || Date.parse(payload.fetchedAt) / 1000);
     const prev = bankBalances[target];
     if (!prev || payload.fetchedAt >= prev.fetchedAt) {
-      bankBalances[target] = { amount, asOf, pending: parseCents(a.pending ?? '0') ?? 0, fetchedAt: payload.fetchedAt };
+      bankBalances[target] = {
+        amount, asOf, pending: parseCents(a.pending ?? '0') ?? 0, fetchedAt: payload.fetchedAt,
+        ...(a.balanceDate ? { refreshedAt: new Date(a.balanceDate * 1000).toISOString() } : {}),
+      };
     }
     // The starting balance is set once: the first time the bank reports this card's balance.
     const openingId = `opening:${target}`;

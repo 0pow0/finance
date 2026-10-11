@@ -394,6 +394,17 @@ function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 86_400_000);
 }
 
+/** Hours since SimpleFIN last got data from the bank, when known. */
+function hoursOld(b: { refreshedAt?: string; asOf: string }, today: string): number {
+  if (b.refreshedAt) return (Date.now() - Date.parse(b.refreshedAt)) / 3_600_000;
+  return daysBetween(b.asOf, today) * 24;
+}
+
+function refreshedText(b: { refreshedAt?: string; asOf: string }): string {
+  if (!b.refreshedAt) return shortDate(b.asOf);
+  return new Date(b.refreshedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
 function shortDate(d: string): string {
   return new Date(`${d}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
@@ -410,15 +421,16 @@ function CardsSection({ ledger, balances, onPick }: { ledger: Ledger; balances: 
   const pendingByCard: Record<string, number> = {};
   for (const p of allPending(ledger)) pendingByCard[p.card] = (pendingByCard[p.card] ?? 0) + p.amount;
   const total = balances.reduce((s, c) => s + c.owed, 0);
-  // Bank data that hasn't refreshed in 2+ days means the SimpleFIN connection needs attention.
+  // SimpleFIN normally gets new bank data about once a day; past 30 hours the connection needs attention.
   const today = todayISO();
-  const stale = balances.filter((c) => c.bank && daysBetween(c.bank.asOf, today) >= 2);
-  const oldest = stale.map((c) => c.bank!.asOf).sort()[0];
+  const latest = (name: string) => ledger.bankBalances?.[name];
+  const stale = balances.filter((c) => latest(c.account.name) && hoursOld(latest(c.account.name)!, today) >= 30);
+  const oldest = stale.map((c) => latest(c.account.name)!).sort((a, b) => hoursOld(b, today) - hoursOld(a, today))[0];
   return (
     <>
       {stale.length > 0 && (
         <div className="card warn-card stack">
-          <strong>Bank data hasn’t updated since {shortDate(oldest)}</strong>
+          <strong>Bank data hasn’t updated since {refreshedText(oldest)}</strong>
           <span className="small">
             SimpleFIN stopped getting new data for {stale.length === balances.filter((c) => c.bank).length ? 'your cards' : stale.map((c) => c.account.label).join(', ')}.
             Open SimpleFIN Bridge, sign in to the bank again (or reconnect it), and new transactions will arrive with the next import.
@@ -438,7 +450,7 @@ function CardsSection({ ledger, balances, onPick }: { ledger: Ledger; balances: 
                 <div className="title">{c.account.label}{c.account.owner ? <span className="tiny muted"> · {c.account.owner}</span> : null}</div>
                 <div className={`tiny ${st.cls}`}>{st.text}</div>
                 <div className="tiny muted">
-                  {c.bank ? `Bank data as of ${shortDate(c.bank.asOf)}` : ''}
+                  {latest(c.account.name) ? `Bank updated ${refreshedText(latest(c.account.name)!)}` : ''}
                   {pendingByCard[c.account.name] ? `${c.bank ? ' · ' : ''}${formatUSD(pendingByCard[c.account.name])} pending` : ''}
                 </div>
               </div>

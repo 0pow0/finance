@@ -87,6 +87,8 @@ export interface BankBalance {
   /** Pending (not yet posted) charges, same sign. */
   pending: Cents;
   fetchedAt: string;
+  /** When SimpleFIN last got data from the bank (ISO). */
+  refreshedAt?: string;
 }
 
 export interface PendingCharge {

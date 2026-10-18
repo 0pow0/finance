@@ -6,6 +6,7 @@ import {
   type BankBalance, type ImportAccount, type Ledger, type PendingCharge, type Transaction,
 } from './ledger';
 import { parseCents } from './money';
+import { FALLBACK, classify, learnHistory, payeeKey, type History } from './classify';
 
 /** What the daily job encrypts into inbox/*.json (see importer/import.mjs). */
 export interface ImportPayload {
@@ -105,44 +106,11 @@ export function cleanPayee(raw: string): string {
   return s;
 }
 
-function payeeKey(p: string): string {
-  return p.toLowerCase().replace(/[^a-z0-9 ]/g, '').split(' ').filter(Boolean).slice(0, 3).join(' ');
-}
-
-const RULES: Array<[RegExp, string]> = [
-  [/trader joe|whole foods|safeway|kroger|costco|walmart grocery|aldi|wegmans|publix|h-?e-?b\b|sprouts|stop & shop|ralphs|vons|albertsons|instacart|grocery|market/i, 'Expenses:Food:Groceries'],
-  [/starbucks|dunkin|peet|blue bottle|philz|coffee|cafe|tea\b/i, 'Expenses:Food:Coffee'],
-  [/doordash|uber ?eats|grubhub|restaurant|pizza|burger|chipotle|mcdonald|taco|sushi|kitchen|grill|bistro|diner|bar\b|bbq|ramen|thai|deli/i, 'Expenses:Food:Dining'],
-  [/shell|chevron|exxon|mobil|bp\b|arco|76\b|valero|sunoco|speedway|wawa|gas\b|fuel/i, 'Expenses:Transport:Gas'],
-  [/uber|lyft|metro|transit|mta\b|bart|clipper|amtrak/i, 'Expenses:Transport:Rideshare'],
-  [/parking|toll|ez ?pass|fastrak|spothero/i, 'Expenses:Transport:Parking-Tolls'],
-  [/netflix|spotify|hulu|disney|apple\.com\/bill|youtube|hbo|max\.com|paramount|peacock|audible|icloud|patreon|subscription/i, 'Expenses:Subscriptions'],
-  [/pg&e|con ?ed|electric|water|utility|comcast|xfinity|verizon|at&t|t-mobile|spectrum|internet/i, 'Expenses:Home:Utilities'],
-  [/cvs|walgreens|rite aid|pharmacy|doctor|dental|clinic|hospital|medical|optometr/i, 'Expenses:Health'],
-  [/home depot|lowe|ikea|bed bath|container store|ace hardware/i, 'Expenses:Home:Supplies'],
-  [/amazon|amzn|target|best buy|ebay|etsy|walmart/i, 'Expenses:Shopping:General'],
-  [/nordstrom|macy|gap\b|old navy|uniqlo|zara|h&m|nike|tj ?maxx|marshalls/i, 'Expenses:Shopping:Clothing'],
-  [/airline|airlines|delta|united|southwest|jetblue|hotel|marriott|hilton|airbnb|expedia|booking\.com/i, 'Expenses:Travel'],
-  [/movie|cinema|amc\b|theater|theatre|ticketmaster|steam|playstation|xbox|nintendo/i, 'Expenses:Entertainment'],
-  [/salon|barber|spa\b|sephora|ulta/i, 'Expenses:Personal-Care'],
-  [/interest charge|annual fee|late fee|foreign transaction/i, 'Expenses:Fees-Interest'],
-];
-
 const PAYMENT_RE = /payment|autopay|thank you|pymt|online transfer/i;
 
-/** Best category guess: what you chose last time for this payee, else keyword rules, else Other. */
-export function guessCategory(ledger: Ledger, payee: string, raw: string): string {
-  const key = payeeKey(payee);
-  let best: Transaction | undefined;
-  for (const t of ledger.transactions) {
-    if (t.flag !== '*' || payeeKey(t.payee) !== key) continue;
-    if (!best || t.date > best.date) best = t;
-  }
-  const fromHistory = best?.postings.find((p) => p.account.startsWith('Expenses:'))?.account;
-  if (fromHistory) return fromHistory;
-  const exists = (a: string) => ledger.accounts.some((x) => x.name === a && !x.closed);
-  for (const [re, account] of RULES) if ((re.test(payee) || re.test(raw)) && exists(account)) return account;
-  return 'Expenses:Misc';
+/** Best category guess: what you chose before for this store, else the merchant list, else Other. */
+export function guessCategory(ledger: Ledger, payee: string, raw: string, history?: History): string {
+  return classify(ledger, payee, raw, history);
 }
 
 /** Checking, savings and investment accounts: not credit cards, so skipped unless you turn them on. */
@@ -270,6 +238,7 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
   }
 
   const working: Ledger = { ...ledger, accounts };
+  const history = learnHistory(ledger);
   const added: Transaction[] = [];
   for (const t of payload.transactions) {
     if (t.pending) continue;
@@ -294,7 +263,7 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
       }
     }
     const isPayment = spend < 0 && PAYMENT_RE.test(raw);
-    const other = isPayment ? 'Assets:Bank:Checking' : guessCategory(working, payee, raw);
+    const other = isPayment ? 'Assets:Bank:Checking' : guessCategory(working, payee, raw, history);
     added.push({
       id: newId(),
       date,
@@ -331,7 +300,7 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
         payee,
         description: raw,
         amount: -cents,
-        category: guessCategory(working, payee, raw),
+        category: guessCategory(working, payee, raw, history),
       });
     }
     pendingCharges[target] = { fetchedAt: payload.fetchedAt, items: items.sort((x, y) => (x.date < y.date ? 1 : -1)) };
@@ -407,7 +376,7 @@ export function applyImport(ledger: Ledger, payload: ImportPayload): { ledger: L
   const lastImportAt = newest ? payload.fetchedAt : ledger.lastImportAt;
   const lastImportAccounts = newest ? payload.accounts.map((a) => a.id) : ledger.lastImportAccounts;
   const result: Ledger = {
-    ...ledger, accounts, importAccounts, transactions: [...recleaned(ledger.transactions, now), ...added], lastImportAt,
+    ...ledger, accounts, importAccounts, transactions: [...recategorized({ ...ledger, accounts, transactions: recleaned(ledger.transactions, now) }, now, history), ...added], lastImportAt,
     ...(Object.keys(bankBalances).length ? { bankBalances } : {}),
     ...(Object.keys(pendingCharges).length ? { pendingCharges } : {}),
     ...(lastImportAccounts ? { lastImportAccounts } : {}),
@@ -535,4 +504,49 @@ function recleaned(txns: Transaction[], now: string): Transaction[] {
     const payee = cleanPayee(t.narration);
     return payee && payee !== t.payee ? { ...t, payee, updatedAt: now } : t;
   });
+}
+
+/**
+ * Re-guess categories for imported purchases you haven't reviewed, and for reviewed ones left in
+ * Other, so a better guess (or something you taught it since) applies to them too.
+ */
+function recategorized(ledger: Ledger, now: string, history: History): Transaction[] {
+  return ledger.transactions.map((t) => {
+    if (t.source !== 'simplefin' || t.payee === 'Card payment' || t.postings.length !== 2) return t;
+    const i = t.postings.findIndex((p) => p.account.startsWith('Expenses:'));
+    if (i < 0) return t;
+    const current = t.postings[i].account;
+    if (t.flag !== '!' && current !== FALLBACK) return t;
+    const guess = classify(ledger, t.payee, t.narration || t.payee, history);
+    if (guess === current || (t.flag !== '!' && guess === FALLBACK)) return t;
+    return { ...t, postings: t.postings.map((p, j) => (j === i ? { ...p, account: guess } : p)), updatedAt: now };
+  });
+}
+
+/** Recategorize now (e.g. right after an update), without waiting for the next import. */
+export function recategorize(ledger: Ledger): Ledger {
+  const now = nowISO();
+  const transactions = recategorized(ledger, now, learnHistory(ledger));
+  return transactions.every((t, i) => t === ledger.transactions[i]) ? ledger : { ...ledger, transactions };
+}
+
+/**
+ * After you change a purchase's category, give the same store's other unreviewed purchases the
+ * same category. Returns how many others changed.
+ */
+export function applyCategoryToSimilar(ledger: Ledger, edited: Transaction): { ledger: Ledger; changed: number } {
+  const category = edited.postings.find((p) => p.account.startsWith('Expenses:'))?.account;
+  if (!category || category === FALLBACK) return { ledger, changed: 0 };
+  const key = payeeKey(edited.payee);
+  if (!key) return { ledger, changed: 0 };
+  const now = nowISO();
+  let changed = 0;
+  const transactions = ledger.transactions.map((t) => {
+    if (t.id === edited.id || t.flag !== '!' || payeeKey(t.payee) !== key || t.postings.length !== 2) return t;
+    const i = t.postings.findIndex((p) => p.account.startsWith('Expenses:'));
+    if (i < 0 || t.postings[i].account === category) return t;
+    changed++;
+    return { ...t, postings: t.postings.map((p, j) => (j === i ? { ...p, account: category } : p)), updatedAt: now };
+  });
+  return changed ? { ledger: { ...ledger, transactions }, changed } : { ledger, changed: 0 };
 }

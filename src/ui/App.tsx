@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { monthOf, todayISO } from '../lib/dates';
 import { deleteTransaction, markReplaced, upsertTransaction, type Ledger, type Transaction } from '../lib/ledger';
+import { applyCategoryToSimilar, recategorize } from '../lib/importer';
 import { loadVault, requestPersistence, type Session } from '../lib/vault';
 import { Activity } from './Activity';
 import { Icon } from './common';
@@ -91,6 +92,15 @@ export function App() {
     setLedger(next);
   }, [session]);
 
+  // Re-sort imported purchases with the latest classifier once per unlock.
+  const recategorizedFor = useRef<Session | null>(null);
+  useEffect(() => {
+    if (!session || !ledger || recategorizedFor.current === session) return;
+    recategorizedFor.current = session;
+    const next = recategorize(ledger);
+    if (next !== ledger) void apply(next).then(() => sync.requestSync());
+  });
+
   const onImported = useCallback((n: number) => toast(`${n} new bank transaction${n === 1 ? '' : 's'} to review`), [toast]);
   const sync = useSync(session, ledgerRef, apply, onImported);
 
@@ -162,9 +172,14 @@ export function App() {
         <TxnEditor ledger={ledger} txn={editing === 'new' ? undefined : editing}
           onClose={() => setEditing(null)}
           onSave={async (t) => {
-            await commit(upsertTransaction(ledger, t));
+            const category = (x: Transaction) => x.postings.find((p) => p.account.startsWith('Expenses:'))?.account;
+            const changedCategory = editing !== 'new' && category(editing) !== category(t);
+            const similar = changedCategory ? applyCategoryToSimilar(upsertTransaction(ledger, t), t) : null;
+            await commit(similar ? similar.ledger : upsertTransaction(ledger, t));
             setEditing(null);
-            toast(editing === 'new' ? 'Saved' : 'Updated');
+            toast(similar?.changed
+              ? `Updated, plus ${similar.changed} other ${t.payee} purchase${similar.changed === 1 ? '' : 's'}`
+              : editing === 'new' ? 'Saved' : 'Updated');
           }}
           onDelete={async (id) => {
             await commit(deleteTransaction(ledger, id));
